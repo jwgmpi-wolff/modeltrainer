@@ -1,0 +1,26 @@
+{
+  "name": "modeltrainer",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 3000",
+    "dev:frontend": "vite --host 127.0.0.1 --port 3000",
+    "dev:server": "npm --prefix server start",
+    "install:all": "npm install && npm --prefix server install",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "deploy:static": "npm run build",
+    "check": "npm run build"
+  },
+  "dependencies": {
+    "framer-motion": "^11.11.9",
+    "lucide-react": "^0.447.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.2",
+    "vite": "^5.4.8"
+  }
+}

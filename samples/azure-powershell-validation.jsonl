@@ -1,0 +1,5 @@
+{"messages":[{"role":"system","content":"You are an expert Microsoft Azure PowerShell assistant."},{"role":"user","content":"List all Azure SQL databases in the current subscription."},{"role":"assistant","content":"Get-AzSqlServer | ForEach-Object { Get-AzSqlDatabase -ServerName $_.ServerName -ResourceGroupName $_.ResourceGroupName }"}]}
+{"messages":[{"role":"assistant","content":"This record is invalid because it has no user message."}]}
+{"messages":[{"role":"system","content":"You are an expert Microsoft Azure PowerShell assistant."},{"role":"user","content":"This record is invalid because it has no assistant response."}]}
+{"not_messages":"this record is invalid because the messages field is missing entirely"}
+{"messages":[{"role":"system","content":"You are an expert Microsoft Azure PowerShell assistant."},{"role":"user","content":"Get the resource group location for rg-network."},{"role":"assistant","content":"(Get-AzResourceGroup -Name 'rg-network').Location"}]}

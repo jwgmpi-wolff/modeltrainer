@@ -1,0 +1,21 @@
+node_modules/
+server/node_modules/
+dist/
+.vite/
+npm-debug.log*
+
+# Local training environment and generated ML artifacts
+.venv-training/
+uploads/
+output/
+merged/
+gguf/
+ollama/
+llama.cpp/
+
+# Local/runtime files
+*.log
+*.tmp
+*.local
+.env
+.env.*

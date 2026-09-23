@@ -1,0 +1,14 @@
+transformers==4.44.2
+accelerate==0.34.2
+datasets==2.21.0
+peft==0.12.0
+trl==0.10.1
+safetensors
+sentencepiece
+protobuf
+tensorboard
+rich
+hf_xet
+torch==2.4.1
+torchvision==0.19.1
+torch-directml==0.2.5.dev240914
