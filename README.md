@@ -164,6 +164,23 @@ The app looks for:
 
 ## Build and deploy
 
+The UI includes a **Deploy actions** card with a real **Run deploy action** button. The button calls the local backend endpoint `POST /api/deploy`, writes real deployment files for the selected target, and runs the real production build. It does not mark a deploy as successful unless the real action succeeds.
+
+Available deploy targets:
+
+| Target | What the button really does |
+|---|---|
+| Local production package | Writes `scripts/deploy-local.ps1` and runs `npm run build`. |
+| GitHub Pages workflow | Writes `.github/workflows/deploy-pages.yml` and runs `npm run build`. After you commit and push the workflow, GitHub Actions performs the actual Pages deployment. |
+| Azure Static Web Apps (azd files) | Writes `azure.yaml`, `infra/main.bicep`, and `public/staticwebapp.config.json`, checks `azd version`, and runs `npm run build`. Then run `azd up` from this folder to provision/deploy. |
+
+The deploy button is intentionally honest:
+
+- It streams real output into **Real command output**.
+- It writes files to disk rather than pretending cloud resources were created.
+- It tells you if `azd` is missing.
+- It does not deploy local GPU training backend behavior to a static host; the static frontend still needs the local backend for training actions.
+
 ### Local production preview
 
 ```powershell
@@ -176,13 +193,40 @@ The static frontend alone is not the complete app; it still needs the local back
 
 ### Static frontend deployment
 
-Run:
+From the UI, choose **GitHub Pages workflow** and press **Run deploy action**, or run:
 
 ```powershell
 npm run deploy:static
 ```
 
 Deploy the generated `dist/` folder to any static host. This is only useful when the user also has the backend running locally or you update `API_BASE` for a hosted backend.
+
+### GitHub Pages automatic action
+
+Use the UI deploy button:
+
+1. Select **GitHub Pages workflow**.
+2. Press **Run deploy action**.
+3. Review `.github/workflows/deploy-pages.yml`.
+4. Commit and push it.
+5. Enable GitHub Pages for GitHub Actions in the repository settings if needed.
+
+### Azure Static Web Apps automatic files
+
+Use the UI deploy button:
+
+1. Select **Azure Static Web Apps (azd files)**.
+2. Press **Run deploy action**.
+3. Review:
+   - `azure.yaml`
+   - `infra/main.bicep`
+   - `public/staticwebapp.config.json`
+4. Install Azure Developer CLI if the deploy log says `azd` is missing.
+5. Run:
+
+   ```powershell
+   azd up
+   ```
 
 ### Backend deployment
 
@@ -245,6 +289,7 @@ Hard requirements:
 - Smoke test must run ollama run and verify a non-empty response.
 - Add Windows-safe upload behavior: if re-uploading the same filename, delete/copy fallback around fs.renameSync EPERM issues.
 - Add a README with install, run, deploy, llama.cpp setup, project standards, and this exact recreation prompt.
+- Add a visible Deploy actions card with a real Run deploy action button. It must support Local production package, GitHub Pages workflow, and Azure Static Web Apps azd files. The button must call a backend endpoint, write real files, run a real production build, stream real logs, and never pretend a cloud deployment happened.
 - Add a .gitignore that excludes node_modules, .venv-training, uploads, output, merged, gguf, ollama, llama.cpp, dist, logs, and .env files.
 
 Implementation details:
@@ -277,4 +322,3 @@ Validation:
 - Python scripts must compile.
 - A quick smoke run must show real stdout/stderr and write real artifacts or fail with a real actionable error.
 ```
-
