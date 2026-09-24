@@ -10,6 +10,7 @@
     "install:all": "npm install && npm --prefix server install",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
+    "deploy:local": "powershell -ExecutionPolicy Bypass -File scripts/deploy-to-local-machine.ps1",
     "deploy:static": "npm run build",
     "check": "npm run build"
   },

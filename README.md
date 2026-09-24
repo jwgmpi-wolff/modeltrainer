@@ -164,22 +164,48 @@ The app looks for:
 
 ## Build and deploy
 
-The UI includes a **Deploy actions** card with a real **Run deploy action** button. The button calls the local backend endpoint `POST /api/deploy`, writes real deployment files for the selected target, and runs the real production build. It does not mark a deploy as successful unless the real action succeeds.
+The app **does not deploy itself from inside the UI**. If it is not already installed and running on a desktop, there is no app process that can deploy itself.
 
-Available deploy targets:
+Deployment starts from this repository on the local machine.
 
-| Target | What the button really does |
-|---|---|
-| Local production package | Writes `scripts/deploy-local.ps1` and runs `npm run build`. |
-| GitHub Pages workflow | Writes `.github/workflows/deploy-pages.yml` and runs `npm run build`. After you commit and push the workflow, GitHub Actions performs the actual Pages deployment. |
-| Azure Static Web Apps (azd files) | Writes `azure.yaml`, `infra/main.bicep`, and `public/staticwebapp.config.json`, checks `azd version`, and runs `npm run build`. Then run `azd up` from this folder to provision/deploy. |
+[![Deploy to Local Machine](https://img.shields.io/badge/Deploy_to_Local_Machine-PowerShell-blue?logo=powershell)](scripts/deploy-to-local-machine.ps1)
 
-The deploy button is intentionally honest:
+The button above opens the local deployment script in the repo. Run it from PowerShell to install dependencies, build the frontend, start the backend, start the frontend, and open the app.
 
-- It streams real output into **Real command output**.
-- It writes files to disk rather than pretending cloud resources were created.
-- It tells you if `azd` is missing.
-- It does not deploy local GPU training backend behavior to a static host; the static frontend still needs the local backend for training actions.
+### One-command local machine deployment
+
+From a standalone clone:
+
+```powershell
+git clone https://github.com/jerrywolff_microsoft/modeltrainer.git
+cd modeltrainer
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-to-local-machine.ps1
+```
+
+From the monorepo:
+
+```powershell
+git clone https://github.com/jwgmpi-wolff/AppsandScripts.git
+cd AppsandScripts\modeltrainer
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-to-local-machine.ps1
+```
+
+You can also run the npm wrapper after dependencies are available:
+
+```powershell
+npm run deploy:local
+```
+
+What the local deployment automation really does:
+
+1. Verifies `node`, `npm`, and `python` are on PATH.
+2. Runs `npm run install:all`.
+3. Runs `npm run build`.
+4. Starts the backend at `http://127.0.0.1:8787` in a new PowerShell window.
+5. Starts the frontend at `http://127.0.0.1:3000` in a new PowerShell window.
+6. Opens the browser to the local app.
+
+The training pipeline still creates and installs `.venv-training` during the app's real **Prepare environment** stage because the ML requirements depend on the detected hardware backend.
 
 ### Local production preview
 
@@ -193,7 +219,7 @@ The static frontend alone is not the complete app; it still needs the local back
 
 ### Static frontend deployment
 
-From the UI, choose **GitHub Pages workflow** and press **Run deploy action**, or run:
+Run:
 
 ```powershell
 npm run deploy:static
@@ -203,30 +229,17 @@ Deploy the generated `dist/` folder to any static host. This is only useful when
 
 ### GitHub Pages automatic action
 
-Use the UI deploy button:
-
-1. Select **GitHub Pages workflow**.
-2. Press **Run deploy action**.
-3. Review `.github/workflows/deploy-pages.yml`.
-4. Commit and push it.
-5. Enable GitHub Pages for GitHub Actions in the repository settings if needed.
+GitHub Pages can host only the static frontend. It cannot provide the local GPU/Python/Ollama backend. To use GitHub Pages, add a workflow in `.github/workflows/deploy-pages.yml`, commit it, push it, and enable GitHub Pages using GitHub Actions.
 
 ### Azure Static Web Apps automatic files
 
-Use the UI deploy button:
+Azure Static Web Apps can host only the static frontend unless you separately design a hosted API. This app's real training backend is intended for a local workstation because it needs local GPU/Python/Ollama access.
 
-1. Select **Azure Static Web Apps (azd files)**.
-2. Press **Run deploy action**.
-3. Review:
-   - `azure.yaml`
-   - `infra/main.bicep`
-   - `public/staticwebapp.config.json`
-4. Install Azure Developer CLI if the deploy log says `azd` is missing.
-5. Run:
+If you still want a static Azure frontend, create/review `azure.yaml`, `infra/main.bicep`, and `public/staticwebapp.config.json`, then run:
 
-   ```powershell
-   azd up
-   ```
+```powershell
+azd up
+```
 
 ### Backend deployment
 
@@ -257,6 +270,7 @@ If hosting the backend on a VM or workstation:
 - Keep "Other model" support so any Hugging Face model ID can be tried.
 - Default to safe settings for the detected hardware.
 - Use quick smoke mode before full training.
+- Do not add an in-app self-deploy button. First deployment belongs in this README and repo automation because a non-installed app cannot deploy itself.
 
 ## Full VS Code / Copilot prompt to recreate this app
 
@@ -289,7 +303,7 @@ Hard requirements:
 - Smoke test must run ollama run and verify a non-empty response.
 - Add Windows-safe upload behavior: if re-uploading the same filename, delete/copy fallback around fs.renameSync EPERM issues.
 - Add a README with install, run, deploy, llama.cpp setup, project standards, and this exact recreation prompt.
-- Add a visible Deploy actions card with a real Run deploy action button. It must support Local production package, GitHub Pages workflow, and Azure Static Web Apps azd files. The button must call a backend endpoint, write real files, run a real production build, stream real logs, and never pretend a cloud deployment happened.
+- Add a README "Deploy to Local Machine" button/link and a real `scripts/deploy-to-local-machine.ps1` automation script. Do not add an in-app self-deploy button, because the app cannot deploy itself before it exists on the desktop.
 - Add a .gitignore that excludes node_modules, .venv-training, uploads, output, merged, gguf, ollama, llama.cpp, dist, logs, and .env files.
 
 Implementation details:

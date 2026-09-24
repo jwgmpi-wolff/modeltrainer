@@ -7,7 +7,6 @@ import {
   FileCheck2,
   MemoryStick,
   Play,
-  Rocket,
   RefreshCw,
   Square,
   Terminal,
@@ -183,8 +182,6 @@ export default function App() {
   const [validation, setValidation] = useState(null);
   const [validating, setValidating] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [deployTarget, setDeployTarget] = useState('local');
-  const [deploying, setDeploying] = useState(false);
   const datasetFileInput = useRef(null);
   const eventSourceRef = useRef(null);
 
@@ -402,39 +399,6 @@ export default function App() {
     }
     setStages((old) => old.map((s) => ({ ...s, selected: failedIds.includes(s.id) })));
     appendLog(`Selected the real failed step(s) for a retry: ${failedIds.join(', ')}. Press "Run now" to retry them for real.`);
-  };
-
-  const runDeployAction = async () => {
-    if (backendOnline === false) {
-      appendLog(`ERROR: The real backend is not reachable at ${API_BASE}. Deployment actions require the backend.`);
-      return;
-    }
-
-    setDeploying(true);
-    appendLog(`DEPLOY: Starting real deploy action for "${deployTarget}".`);
-
-    try {
-      const response = await fetch(`${API_BASE}/api/deploy`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target: deployTarget }),
-      });
-      const result = await response.json();
-
-      result.lines?.forEach((line) => appendLog(`  ${line}`));
-      result.writtenFiles?.forEach((file) => appendLog(`  WROTE: ${file}`));
-
-      if (!response.ok || !result.ok) {
-        appendLog(`DEPLOY FAILED for "${deployTarget}": ${result.error || 'Unknown error.'}`);
-        return;
-      }
-
-      appendLog(`DEPLOY READY for "${deployTarget}". Build output and deploy files are real.`);
-    } catch (error) {
-      appendLog(`ERROR: Could not run deploy action. (${error.message})`);
-    } finally {
-      setDeploying(false);
-    }
   };
 
   return (
@@ -726,33 +690,6 @@ export default function App() {
             </CardContent>
           </Card>
         </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Rocket className="h-5 w-5 text-blue-400" />
-              Deploy actions
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
-            <div className="space-y-2">
-              <Label>Deploy target</Label>
-              <Select value={deployTarget} onValueChange={setDeployTarget} aria-label="Deploy target">
-                <SelectItem value="local">Local production package</SelectItem>
-                <SelectItem value="github-pages">GitHub Pages workflow</SelectItem>
-                <SelectItem value="azure-static-web-app">Azure Static Web Apps (azd files)</SelectItem>
-              </Select>
-              <p className="text-xs text-slate-400">
-                Runs real deployment preparation: writes provider files when needed and runs the real production build. Cloud targets generate reviewable deployment files instead of pretending a cloud deploy happened.
-              </p>
-            </div>
-
-            <Button onClick={runDeployAction} disabled={deploying || running || backendOnline === false}>
-              <Rocket className="mr-2 h-4 w-4" />
-              {deploying ? 'Deploy action running...' : 'Run deploy action'}
-            </Button>
-          </CardContent>
-        </Card>
 
         <Card>
           <CardHeader>
