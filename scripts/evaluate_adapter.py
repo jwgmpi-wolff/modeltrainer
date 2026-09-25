@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from runtime_paths import WORKSPACE_ROOT
 
 
 def main():
@@ -17,7 +17,7 @@ def main():
     parser.add_argument("--output-name", required=True)
     args = parser.parse_args()
 
-    adapter_dir = REPO_ROOT / "output" / args.output_name
+    adapter_dir = WORKSPACE_ROOT / "output" / args.output_name
     if not adapter_dir.exists() or not any(adapter_dir.iterdir()):
         print(
             json.dumps(

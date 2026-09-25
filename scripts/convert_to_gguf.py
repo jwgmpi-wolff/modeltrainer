@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from runtime_paths import WORKSPACE_ROOT
 
 
 def fail(message):
@@ -27,7 +27,7 @@ def fail(message):
 def find_llama_cpp_converter():
     # Common real locations where a user might have cloned llama.cpp.
     candidates = [
-        REPO_ROOT / "llama.cpp" / "convert_hf_to_gguf.py",
+        WORKSPACE_ROOT / "llama.cpp" / "convert_hf_to_gguf.py",
         Path.home() / "llama.cpp" / "convert_hf_to_gguf.py",
     ]
     for candidate in candidates:
@@ -41,10 +41,22 @@ def main():
     parser.add_argument("--output-name", required=True)
     args = parser.parse_args()
 
-    merged_dir = REPO_ROOT / "merged" / args.output_name
+    merged_dir = WORKSPACE_ROOT / "merged" / args.output_name
     if not merged_dir.exists() or not any(merged_dir.iterdir()):
         fail(f"No merged model found at {merged_dir}. Run 'Merge adapter' first.")
         return
+
+    training_manifest_path = merged_dir / "training_manifest.json"
+    if training_manifest_path.exists():
+        modality = json.loads(training_manifest_path.read_text(encoding="utf-8")).get("modality", "text")
+        if modality == "video":
+            fail(
+                "This is a video/vision-language adapter. llama.cpp's GGUF converter does not yet support "
+                "exporting the vision tower for this model architecture, so GGUF/Ollama conversion is not "
+                f"available for video models. The merged model at {merged_dir} is still directly usable "
+                "with the transformers library (AutoProcessor + the model class named in training_manifest.json)."
+            )
+            return
 
     converter = find_llama_cpp_converter()
     if converter is None:
@@ -55,7 +67,7 @@ def main():
         )
         return
 
-    gguf_dir = REPO_ROOT / "gguf"
+    gguf_dir = WORKSPACE_ROOT / "gguf"
     gguf_dir.mkdir(parents=True, exist_ok=True)
     output_file = gguf_dir / f"{args.output_name}-f16.gguf"
 

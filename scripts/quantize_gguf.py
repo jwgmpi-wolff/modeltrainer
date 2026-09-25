@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from runtime_paths import WORKSPACE_ROOT
 
 
 def fail(message):
@@ -28,10 +28,10 @@ def find_quantize_binary():
             return found
 
     candidates = [
-        REPO_ROOT / "llama.cpp" / "build" / "bin" / "llama-quantize",
-        REPO_ROOT / "llama.cpp" / "build" / "bin" / "llama-quantize.exe",
-        REPO_ROOT / "llama.cpp" / "llama-quantize",
-        REPO_ROOT / "llama.cpp" / "llama-quantize.exe",
+        WORKSPACE_ROOT / "llama.cpp" / "build" / "bin" / "llama-quantize",
+        WORKSPACE_ROOT / "llama.cpp" / "build" / "bin" / "llama-quantize.exe",
+        WORKSPACE_ROOT / "llama.cpp" / "llama-quantize",
+        WORKSPACE_ROOT / "llama.cpp" / "llama-quantize.exe",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -46,7 +46,7 @@ def main():
     parser.add_argument("--quant-type", default="Q4_K_M")
     args = parser.parse_args()
 
-    gguf_dir = REPO_ROOT / "gguf"
+    gguf_dir = WORKSPACE_ROOT / "gguf"
     input_file = gguf_dir / f"{args.output_name}-f16.gguf"
 
     if not input_file.exists():

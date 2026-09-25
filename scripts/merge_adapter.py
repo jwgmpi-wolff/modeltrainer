@@ -10,7 +10,7 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from runtime_paths import WORKSPACE_ROOT
 
 
 def fail(message):
@@ -23,7 +23,7 @@ def main():
     parser.add_argument("--output-name", required=True)
     args = parser.parse_args()
 
-    adapter_dir = REPO_ROOT / "output" / args.output_name
+    adapter_dir = WORKSPACE_ROOT / "output" / args.output_name
     if not adapter_dir.exists() or not any(adapter_dir.iterdir()):
         fail(f"No adapter checkpoint found at {adapter_dir}. Run 'QLoRA training' first.")
         return
@@ -33,7 +33,7 @@ def main():
         from peft import PeftModel
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except ImportError as exc:
-        fail(f"A required package is missing: {exc}. Install scripts/requirements.txt first.")
+        fail(f"A required package is missing: {exc}. Install requirements-training.txt first.")
         return
 
     adapter_config_path = adapter_dir / "adapter_config.json"
@@ -50,18 +50,44 @@ def main():
         fail("adapter_config.json does not list a base model name; cannot merge.")
         return
 
-    merged_dir = REPO_ROOT / "merged" / args.output_name
+    # training_manifest.json is written by train_qlora.py (modality "text")
+    # and train_video_vl.py (modality "video"). Older adapters trained before
+    # this file existed are honestly treated as "text", which was the only
+    # modality this app supported at the time.
+    training_manifest_path = adapter_dir / "training_manifest.json"
+    modality = "text"
+    if training_manifest_path.exists():
+        modality = _json.loads(training_manifest_path.read_text(encoding="utf-8")).get("modality", "text")
+
+    merged_dir = WORKSPACE_ROOT / "merged" / args.output_name
     merged_dir.mkdir(parents=True, exist_ok=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(base_model_name)
-    base_model = AutoModelForCausalLM.from_pretrained(base_model_name, torch_dtype="auto")
-    merged_model = PeftModel.from_pretrained(base_model, str(adapter_dir))
-    merged_model = merged_model.merge_and_unload()
+    if modality == "video":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from train_video_vl import resolve_model_class  # noqa: E402
+        from transformers import AutoProcessor
 
-    merged_model.save_pretrained(str(merged_dir))
-    tokenizer.save_pretrained(str(merged_dir))
+        model_cls, _ = resolve_model_class(base_model_name)
+        processor = AutoProcessor.from_pretrained(base_model_name)
+        base_model = model_cls.from_pretrained(base_model_name, torch_dtype="auto")
+        merged_model = PeftModel.from_pretrained(base_model, str(adapter_dir))
+        merged_model = merged_model.merge_and_unload()
 
-    print(json.dumps({"ok": True, "merged_dir": str(merged_dir)}, indent=2))
+        merged_model.save_pretrained(str(merged_dir))
+        processor.save_pretrained(str(merged_dir))
+        (merged_dir / "training_manifest.json").write_text(
+            _json.dumps({"modality": "video", "base_model": base_model_name}, indent=2), encoding="utf-8"
+        )
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+        base_model = AutoModelForCausalLM.from_pretrained(base_model_name, torch_dtype="auto")
+        merged_model = PeftModel.from_pretrained(base_model, str(adapter_dir))
+        merged_model = merged_model.merge_and_unload()
+
+        merged_model.save_pretrained(str(merged_dir))
+        tokenizer.save_pretrained(str(merged_dir))
+
+    print(json.dumps({"ok": True, "merged_dir": str(merged_dir), "modality": modality}, indent=2))
     sys.exit(0)
 
 

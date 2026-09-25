@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from runtime_paths import WORKSPACE_ROOT
 
 
 def fail(message):
@@ -34,14 +34,14 @@ def main():
         fail("The 'ollama' CLI was not found on PATH. Install Ollama from https://ollama.com first.")
         return
 
-    gguf_dir = REPO_ROOT / "gguf"
+    gguf_dir = WORKSPACE_ROOT / "gguf"
     quantized_file = gguf_dir / f"{args.output_name}-{args.quant_type}.gguf"
 
     if not quantized_file.exists():
         fail(f"No quantized GGUF file found at {quantized_file}. Run 'Quantize GGUF' first.")
         return
 
-    modelfile_dir = REPO_ROOT / "ollama"
+    modelfile_dir = WORKSPACE_ROOT / "ollama"
     modelfile_dir.mkdir(parents=True, exist_ok=True)
     modelfile_path = modelfile_dir / f"{args.output_name}.Modelfile"
     modelfile_path.write_text(f'FROM {quantized_file.resolve()}\n', encoding="utf-8")

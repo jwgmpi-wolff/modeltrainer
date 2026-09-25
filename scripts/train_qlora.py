@@ -26,7 +26,8 @@ import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from runtime_paths import WORKSPACE_ROOT
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
@@ -63,7 +64,7 @@ def main():
         fail(
             "The 'torch' package is not installed in this Python environment. "
             "Run the 'Prepare environment' stage first; the app installs the real "
-            "requirements there. For manual repair, run: .venv-training\\Scripts\\pip.exe install -r scripts\\requirements.txt"
+            "requirements there. For manual repair, run: .venv-training\\Scripts\\pip.exe install -r requirements-training.txt"
         )
         return
 
@@ -96,11 +97,11 @@ def main():
     except ImportError as exc:
         fail(
             f"A required training package is missing: {exc}. Run the 'Prepare environment' stage first, "
-            "or manually run: .venv-training\\Scripts\\pip.exe install -r scripts\\requirements.txt"
+            "or manually run: .venv-training\\Scripts\\pip.exe install -r requirements-training.txt"
         )
         return
 
-    output_dir = REPO_ROOT / "output" / args.output_name
+    output_dir = WORKSPACE_ROOT / "output" / args.output_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     quantized = False
@@ -179,6 +180,12 @@ def main():
 
     trainer.train()
     trainer.save_model(str(output_dir))
+
+    # Recorded so 'Merge adapter' (and later stages) can tell this apart from
+    # a video/vision-language adapter without guessing from the base model
+    # name.
+    manifest_out = {"modality": "text", "base_model": args.model}
+    (output_dir / "training_manifest.json").write_text(json.dumps(manifest_out, indent=2), encoding="utf-8")
 
     print(
         json.dumps(

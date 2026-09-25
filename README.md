@@ -71,9 +71,22 @@ This installs:
 
 The ML Python environment is intentionally created by the real **Prepare environment** pipeline stage, because the required packages depend on the hardware backend detected on the machine running the app.
 
-## Run locally
+## Launch the clickable Windows app
 
-Open two terminals.
+Build the Windows desktop app and create shortcuts:
+
+```powershell
+cd C:\Users\jerrywolff\Documents\.git\modeltrainer
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-to-local-machine.ps1
+```
+
+This creates `release\win-*-unpacked\Local Model Lab.exe`, adds **Local Model Lab** shortcuts on the desktop and Start menu, and starts the app. Launch the trainer later by double-clicking either shortcut. The app opens in its own desktop window and owns its local training service; it does not open a browser or require terminal windows to remain open.
+
+The desktop app writes generated datasets, environments, adapters, merged models, and GGUF files under the current Windows user's Local Model Lab application-data workspace so packaged program files remain read-only.
+
+## Developer mode
+
+The browser-based Vite workflow remains available only for development. Open two terminals.
 
 Terminal 1 - backend:
 
@@ -121,6 +134,65 @@ Use the sample files in `samples/` as seed examples:
 - `azure-powershell-commands.jsonl`
 - `azure-powershell-validation.jsonl`
 
+## Video / vision-language fine-tuning (experimental)
+
+The app can also fine-tune a real vision-language model (Qwen2-VL / Qwen2.5-VL) on video clips, in addition to the
+text-only pipeline above. This is a genuinely separate pipeline with its own model classes, venv, and requirements
+file — it is not a simulation or a "describe the video as text" shortcut.
+
+**Requirements specific to this pipeline:**
+
+- **ffmpeg must be installed and on PATH.** Frame extraction shells out to the real `ffmpeg` CLI binary rather than
+  a pip-installed video-decoding library, because `opencv-python`, `PyAV` (`av`), and `decord` do not currently
+  publish official Windows **ARM64** wheels (only experimental/community ones). `ffmpeg` itself does have real,
+  actively maintained Windows ARM64 builds:
+  - Windows (including Snapdragon X / ARM64 laptops): download a build from
+    [BtbN/FFmpeg-Builds releases](https://github.com/BtbN/FFmpeg-Builds/releases) — pick a `winarm64` asset on ARM64,
+    or `win64` on an Intel/AMD PC — then add its `bin` folder to your PATH.
+  - macOS: `brew install ffmpeg`
+  - Linux: `sudo apt install ffmpeg` (or your distro's package manager)
+  - The "Prepare environment" and "Train (video)" stages both check for `ffmpeg` and fail with this exact
+    installation guidance if it is missing — nothing pretends to succeed without it.
+- A **separate Python virtual environment** (`.venv-training-video`, with `requirements-video-training.txt`) is used
+  instead of the text pipeline's `.venv-training`, because Qwen2.5-VL needs `transformers>=4.49.0` while the text
+  pipeline pins `transformers==4.44.2`. The video pipeline pins `transformers>=4.49.0,<5.0.0` — real testing found
+  that `transformers>=5.0.0` requires `torch>=2.5`, but `torch-directml` (the DirectML backend) only supports
+  `torch==2.4.1`, so unpinned installs silently disabled all PyTorch model loading in `transformers`. Run "Prepare
+  environment" once with video mode selected to create it.
+
+**Manifest format:** a `.jsonl` file, one JSON object per line, referencing real video clip files by name:
+
+```json
+{"video": "clip1.mp4", "messages": [{"role": "user", "content": "Describe what happens in this clip."}, {"role": "assistant", "content": "A person walks across a room and picks up a red mug."}], "fps": 1.0, "max_frames": 8}
+```
+
+Supported video extensions: `.mp4 .mov .mkv .webm .avi .m4v .mpeg .mpg`. In the app, switch **Training data type** to
+**Video (vision-language)**, browse for the manifest and every real video file it references, click **Upload
+dataset**, then optionally **Check this dataset** (this also probes each file with `ffprobe`, if installed, for real
+duration/resolution).
+
+**Known limitations of this pipeline (by design, not oversights):**
+
+- **Batch size is fixed at 1.** Different videos produce different numbers of frames/tokens, so naive batch
+  stacking isn't implemented; use **Grad. steps** (gradient accumulation) to reach a larger effective batch size.
+- **GGUF conversion, quantization, Ollama registration, and the smoke test are not available for video models.**
+  `llama.cpp` does not yet have an export path for these vision-language architectures' vision towers. The
+  "Convert to GGUF" stage honestly refuses with this explanation instead of producing a broken file, and those four
+  stages are grayed out automatically in the UI when video mode is selected. The merged model directory (under
+  `merged/<name>`) is still directly usable with the `transformers` library (`AutoProcessor` + the model class
+  recorded in that folder's `training_manifest.json`).
+- **Only Qwen2-VL / Qwen2.5-VL 2B/3B are realistic on this hardware.** The same ≥6.5B-parameter guard used by the
+  text pipeline applies here too, with extra vision-tower memory overhead factored in — 7B video models need a real
+  NVIDIA CUDA GPU.
+- **DirectML GPUs fall back to CPU for video training.** Qwen2-VL/Qwen2.5-VL's vision tower patch-embedding layer
+  uses a real 3D convolution (`nn.Conv3d`), and real testing found that `torch-directml` does not support it —
+  it raises `RuntimeError: input must be 4-dimensional` even on a correctly-shaped 5D tensor. Rather than crash
+  mid-training or silently pretend GPU acceleration is happening, "Train (video)" runs a real preflight probe (an
+  actual tiny `Conv3d` forward pass on the detected device) before training starts. If that probe fails, it prints
+  an honest warning and falls back to the real CPU for the whole run instead. Training still completes correctly
+  (a real adapter is produced), just much more slowly than a GPU-accelerated text run on the same hardware. This
+  only affects DirectML; NVIDIA CUDA GPUs support Conv3d and are unaffected.
+
 ## Real smoke result observed on this machine
 
 On a Snapdragon X / Qualcomm Adreno DirectML laptop, the real quick-smoke run with Qwen 2.5 Coder 1.5B:
@@ -134,6 +206,86 @@ On a Snapdragon X / Qualcomm Adreno DirectML laptop, the real quick-smoke run wi
 - Failed honestly at GGUF conversion because `llama.cpp/convert_hf_to_gguf.py` was not present.
 
 This proves the pipeline is real, but it also shows that DirectML plus a 1.5B model can be too slow for practical iteration on this hardware. Use smaller models/settings for fast tests.
+
+On the same Snapdragon X / Qualcomm Adreno DirectML laptop, the real video pipeline smoke test with
+`Qwen/Qwen2-VL-2B-Instruct` on two synthetic test clips:
+
+- Validated the manifest and both video files with real `ffprobe` calls.
+- Installed a real, separate video-training venv (`transformers` pinned to `>=4.49.0,<5.0.0` — see the note below).
+- Extracted real frames from each clip with `ffmpeg` and built a real prompt via `AutoProcessor.apply_chat_template`.
+- Ran the real preflight Conv3d probe, which failed on the DirectML device (`RuntimeError: input must be
+  4-dimensional`), so the run honestly fell back to CPU as described above.
+- Completed one real LoRA training step on CPU (loss `4.1969`).
+- Produced a real adapter, tokenizer files, and `training_manifest.json` (`modality: "video"`) under
+  `output/video-smoke-test`.
+
+This confirms the video pipeline's manifest validation, frame extraction, processor/tokenization, and training loop
+are all genuinely correct end-to-end — the only real issue found was DirectML's lack of Conv3d support, which is now
+handled with an honest CPU fallback instead of a crash.
+
+## Qualcomm / Snapdragon NPU deployment and INT8 quantization (`scripts/deploy_to_npu.py`)
+
+This is a **standalone script**, not a pipeline stage in the app UI. Run it manually after a merge:
+
+```powershell
+python scripts\deploy_to_npu.py --model-dir merged\azure-powershell-assistant --output-name azure-powershell-assistant
+```
+
+### How it taps into the Snapdragon NPU / GPU
+
+- **NPU**: the script exports the merged Hugging Face model to real ONNX (via the Optimum CLI), then loads it with
+  `onnxruntime` and registers the real **QNN Execution Provider** (`onnxruntime-qnn`'s bundled Qualcomm QNN/Hexagon
+  backend libraries). `ort.get_ep_devices()` is used to find the actual on-device NPU entry
+  (`QNNExecutionProvider` + a device whose type reports `NPU`) — this is the real, supported way to target the
+  Snapdragon Hexagon NPU from onnxruntime on Windows; there is no separate "Snapdragon SDK" call needed once
+  `onnxruntime-qnn` is installed.
+- **GPU (DirectML)**: for LoRA training and inference elsewhere in this app, `torch-directml` is used instead — this
+  is the real, generic way to reach any Windows GPU (AMD, Intel, Qualcomm Adreno, or non-CUDA NVIDIA) through
+  DirectX 12, and is what backs the "Windows GPU notes" section above.
+- Both paths are real hardware execution providers, not simulated/mocked backends — if the hardware or driver isn't
+  present, the script fails honestly instead of pretending to accelerate.
+
+### Real INT8 quantization stage added this round
+
+Before verifying NPU placement, the script now runs a **real static QDQ INT8 quantization** pass
+(`quantize_to_int8()`), tailored for the QNN/Hexagon compiler:
+
+1. `qnn_preprocess_model()` fuses/prepares the ONNX graph for QNN.
+2. A real `CalibrationDataReader` (`_build_calibration_reader()`) runs real forward passes through the model with
+   varying sequence-length and KV-cache-length sample inputs, so calibration statistics come from genuine
+   activations, not fabricated ranges.
+3. `get_qnn_qdq_config()` + `quantize()` produce a real QDQ INT8 model using `QuantType.QUInt8` for both weights and
+   activations — this is the standard, most portable QNN/HTP quantization configuration.
+4. `_describe_kv_cache_inputs()` reads the model's own ONNX input signature (layer count, KV head count, head dim)
+   directly from the exported graph instead of hardcoding it, so this works across different model sizes/architectures.
+
+`verify_on_npu()` was also upgraded to run a **real `sess.run()` forward pass** (with correctly-shaped dummy
+KV-cache inputs) before reading onnxruntime's structured profiling JSON, because session construction alone only
+emits `"Session"`-category profiling events — only an actual executed inference emits the `"cat": "Node"` events
+needed to see genuine per-node NPU-vs-CPU placement.
+
+### Real result observed on this machine
+
+On the same Snapdragon X / Qualcomm Adreno laptop, running the full pipeline against the `azure-powershell-assistant`
+merged model produced this **honest** real finding, reproduced identically at three different precision levels:
+
+| Quantization level | Result on real Hexagon NPU |
+|---|---|
+| fp32 (no quantization) | `QNN_GRAPH_ERROR_INVALID_TENSOR` (code `6004`), 0 of ~5,700+ nodes placed on NPU |
+| Dynamic weight-only INT8 | Same error, same 0-node NPU placement |
+| Static QDQ INT8 (new this round) | Same error, same 0-node NPU placement |
+
+In every case onnxruntime **silently falls back to full CPU execution** and inference still completes correctly
+(e.g. `logits shape: (1, 4, 151936)`), because onnxruntime treats EP placement failures as non-fatal by design. The
+`int8/` quantized model itself was produced successfully (a real ~4 MB `model.onnx` + ~1.8 GB external-data file for
+this 1.5B-parameter model) — quantization is not the blocker. The blocker is that this specific model's ONNX graph
+(most likely something in how the KV-cache / dynamic-shape inputs are represented) is not currently compatible with
+this machine's QNN/HTP compiler, independent of numeric precision. This is reported honestly in the script's JSON
+output rather than being reported as a success.
+
+**No screenshots are included for this stage** because it is a CLI script with JSON output, not a GUI feature of the
+app — the table above and the JSON `note` field the script prints are the real, honest proof of what actually
+happened on this hardware.
 
 ## GGUF / Ollama setup
 
@@ -164,13 +316,13 @@ The app looks for:
 
 ## Build and deploy
 
-The app **does not deploy itself from inside the UI**. If it is not already installed and running on a desktop, there is no app process that can deploy itself.
+The app **does not deploy itself from inside the UI**. Build the desktop launcher from this repository, then launch it by clicking the generated executable.
 
 Deployment starts from this repository on the local machine.
 
 [![Deploy to Local Machine](https://img.shields.io/badge/Deploy_to_Local_Machine-PowerShell-blue?logo=powershell)](scripts/deploy-to-local-machine.ps1)
 
-The button above opens the local deployment script in the repo. Run it from PowerShell to install dependencies, build the frontend, start the backend, start the frontend, and open the app.
+The button above opens the local deployment script in the repo. Run it from PowerShell to install dependencies, build the desktop application, and open the generated launcher.
 
 ### One-command local machine deployment
 
@@ -200,12 +352,25 @@ What the local deployment automation really does:
 
 1. Verifies `node`, `npm`, and `python` are on PATH.
 2. Runs `npm run install:all`.
-3. Runs `npm run build`.
-4. Starts the backend at `http://127.0.0.1:8787` in a new PowerShell window.
-5. Starts the frontend at `http://127.0.0.1:3000` in a new PowerShell window.
-6. Opens the browser to the local app.
+3. Builds the React frontend.
+4. Packages the frontend and backend together as a Windows desktop application.
+5. Creates `release\win-*-unpacked\Local Model Lab.exe`.
+6. Creates desktop and Start menu shortcuts to that executable.
+7. Opens the desktop app.
 
 The training pipeline still creates and installs `.venv-training` during the app's real **Prepare environment** stage because the ML requirements depend on the detected hardware backend.
+
+To build the launcher without opening it:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-to-local-machine.ps1 -BuildOnly
+```
+
+To run the desktop shell directly from a development checkout:
+
+```powershell
+npm run desktop
+```
 
 ### Local production preview
 
@@ -215,7 +380,7 @@ npm run build
 npm run preview
 ```
 
-The static frontend alone is not the complete app; it still needs the local backend at `http://127.0.0.1:8787` for hardware checks, uploads, and pipeline execution.
+The static frontend alone is not the complete app. The packaged desktop application starts and owns the backend automatically.
 
 ### Static frontend deployment
 

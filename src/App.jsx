@@ -14,7 +14,11 @@ import {
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
-const API_BASE = 'http://127.0.0.1:8787';
+const apiBaseQuery = new URLSearchParams(window.location.search).get('apiBase');
+const API_BASE =
+  window.location.protocol === 'file:' && /^http:\/\/127\.0\.0\.1:\d+$/.test(apiBaseQuery || '')
+    ? apiBaseQuery
+    : 'http://127.0.0.1:8787';
 
 const initialStages = [
   { id: 'validate', name: 'Validate training data', status: 'ready', selected: true },
@@ -156,6 +160,23 @@ const baseModelOptions = [
   { value: 'custom', label: 'Other (type a Hugging Face model ID)' },
 ];
 
+// Video/vision-language models this app can actually load with
+// resolve_model_class() in scripts/train_video_vl.py. Kept intentionally
+// small — Qwen2-VL/2.5-VL 2B/3B are the only sizes realistic on a laptop GPU
+// without CUDA, per the model-size guard in that script.
+const videoModelOptions = [
+  { value: 'Qwen/Qwen2-VL-2B-Instruct', label: 'Qwen 2 VL 2B Instruct' },
+  { value: 'Qwen/Qwen2.5-VL-3B-Instruct', label: 'Qwen 2.5 VL 3B Instruct' },
+  { value: 'Qwen/Qwen2-VL-7B-Instruct', label: 'Qwen 2 VL 7B Instruct (needs a real NVIDIA GPU)' },
+  { value: 'Qwen/Qwen2.5-VL-7B-Instruct', label: 'Qwen 2.5 VL 7B Instruct (needs a real NVIDIA GPU)' },
+  { value: 'custom', label: 'Other (type a Hugging Face model ID)' },
+];
+
+// Stages that convert_to_gguf.py honestly refuses to run for video adapters
+// (no GGUF export path exists yet for these vision-language architectures).
+// Grayed out here too so the reason is visible before the run even starts.
+const VIDEO_UNSUPPORTED_STAGE_IDS = new Set(['convert', 'quantize', 'ollama', 'smoke']);
+
 const Progress = ({ value }) => (
   <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
     <div className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all" style={{ width: `${value}%` }} />
@@ -182,11 +203,22 @@ export default function App() {
   const [validation, setValidation] = useState(null);
   const [validating, setValidating] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [datasetKind, setDatasetKind] = useState('text'); // 'text' | 'video'
+  const [videoModel, setVideoModel] = useState('Qwen/Qwen2-VL-2B-Instruct');
+  const [customVideoModel, setCustomVideoModel] = useState('');
+  const [maxFrames, setMaxFrames] = useState('8');
+  const [fps, setFps] = useState('1');
+  const [videoManifestFile, setVideoManifestFile] = useState(null); // File object, not yet uploaded
+  const [videoClipFiles, setVideoClipFiles] = useState([]); // FileList/array, not yet uploaded
   const datasetFileInput = useRef(null);
+  const videoManifestInput = useRef(null);
+  const videoClipsInput = useRef(null);
   const eventSourceRef = useRef(null);
 
   const selectedCount = useMemo(() => stages.filter((s) => s.selected).length, [stages]);
-  const effectiveModel = model === 'custom' ? customModel.trim() : model;
+  const effectiveModel = datasetKind === 'video'
+    ? (videoModel === 'custom' ? customVideoModel.trim() : videoModel)
+    : (model === 'custom' ? customModel.trim() : model);
 
   const appendLog = (line) => setLogs((old) => [...old.slice(-40), line]);
 
@@ -204,7 +236,10 @@ export default function App() {
       );
     } catch (error) {
       setBackendOnline(false);
-      appendLog(`ERROR: Could not reach the local backend at ${API_BASE}. Start it with "npm start" in the server folder. (${error.message})`);
+      appendLog(
+        `ERROR: Could not reach the local training service at ${API_BASE}. ` +
+          `Restart Local Model Lab, or start the backend when using developer mode. (${error.message})`,
+      );
     }
   };
 
@@ -227,6 +262,16 @@ export default function App() {
       eventSourceRef.current?.close();
     };
   }, []);
+
+  // Video adapters can't go through GGUF/Ollama/smoke-test yet (see the
+  // honest refusal in convert_to_gguf.py), so those steps are force-unchecked
+  // whenever video mode is on, rather than letting them run and fail late.
+  useEffect(() => {
+    if (datasetKind !== 'video') return;
+    setStages((old) =>
+      old.map((s) => (VIDEO_UNSUPPORTED_STAGE_IDS.has(s.id) ? { ...s, selected: false } : s)),
+    );
+  }, [datasetKind]);
 
   const chooseDatasetFile = async (event) => {
     const [file] = event.target.files;
@@ -269,6 +314,67 @@ export default function App() {
     appendLog(`DATA: Picked sample "${sample?.name}" from the backend's samples folder.`);
   };
 
+  const chooseVideoManifestFile = (event) => {
+    const [file] = event.target.files;
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.jsonl')) {
+      appendLog('ERROR: The video manifest must be a .jsonl file.');
+      event.target.value = '';
+      return;
+    }
+    setVideoManifestFile(file);
+    setValidation(null);
+    setDataset(null);
+  };
+
+  const chooseVideoClipFiles = (event) => {
+    const files = Array.from(event.target.files || []);
+    setVideoClipFiles(files);
+    setValidation(null);
+    setDataset(null);
+  };
+
+  const uploadVideoDataset = async () => {
+    if (!videoManifestFile) {
+      appendLog('ERROR: Pick a manifest .jsonl file first.');
+      return;
+    }
+    if (videoClipFiles.length === 0) {
+      appendLog('ERROR: Pick the real video clip files referenced by the manifest.');
+      return;
+    }
+
+    setUploading(true);
+    setValidation(null);
+    try {
+      const formData = new FormData();
+      formData.append('manifest', videoManifestFile);
+      videoClipFiles.forEach((file) => formData.append('videos', file));
+
+      const response = await fetch(`${API_BASE}/api/upload-video-dataset`, { method: 'POST', body: formData });
+      const result = await response.json();
+
+      if (!response.ok || !result.ok) {
+        appendLog(`ERROR: Video dataset upload failed. ${result.error || 'Unknown error.'}`);
+        return;
+      }
+
+      setDataset({
+        path: result.manifestPath,
+        videosDir: result.videosDir,
+        name: videoManifestFile.name,
+        videoCount: result.videoCount,
+      });
+      appendLog(
+        `DATA: Uploaded manifest "${videoManifestFile.name}" and ${result.videoCount} real video file(s) to ${result.videosDir}.`,
+      );
+    } catch (error) {
+      appendLog(`ERROR: Could not upload the video dataset. Is the backend running? (${error.message})`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const validateDataset = async () => {
     if (!dataset) {
       appendLog('ERROR: Pick a training data file first.');
@@ -280,7 +386,11 @@ export default function App() {
       const response = await fetch(`${API_BASE}/api/validate-dataset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ datasetPath: dataset.path }),
+        body: JSON.stringify({
+          datasetPath: dataset.path,
+          kind: datasetKind,
+          videosDir: dataset.videosDir,
+        }),
       });
       const result = await response.json();
       setValidation(result);
@@ -296,7 +406,10 @@ export default function App() {
     }
   };
 
-  const toggleStage = (id) => setStages((old) => old.map((s) => (s.id === id ? { ...s, selected: !s.selected } : s)));
+  const toggleStage = (id) => {
+    if (datasetKind === 'video' && VIDEO_UNSUPPORTED_STAGE_IDS.has(id)) return;
+    setStages((old) => old.map((s) => (s.id === id ? { ...s, selected: !s.selected } : s)));
+  };
 
   const streamRun = (runId, selectedStages) => {
     const source = new EventSource(`${API_BASE}/api/run/${runId}/events`);
@@ -333,7 +446,11 @@ export default function App() {
 
   const runPipeline = async () => {
     if (!dataset) {
-      appendLog('ERROR: Pick a JSONL training dataset before starting.');
+      appendLog(
+        datasetKind === 'video'
+          ? 'ERROR: Upload a video manifest and video clips before starting.'
+          : 'ERROR: Pick a JSONL training dataset before starting.',
+      );
       return;
     }
 
@@ -367,6 +484,10 @@ export default function App() {
             name,
             model: effectiveModel,
             datasetPath: dataset.path,
+            datasetKind,
+            videosDir: dataset.videosDir,
+            maxFrames: Number(maxFrames),
+            fps: Number(fps),
             maxLength: Number(maxLength),
             batchSize: Number(batchSize),
             gradAccum: Number(gradAccum),
@@ -446,98 +567,257 @@ export default function App() {
               <CardTitle>Pick your settings</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2 md:col-span-2">
+                <Label>Training data type</Label>
+                <div className="flex gap-2">
+                  <Button
+                    variant={datasetKind === 'text' ? 'default' : 'secondary'}
+                    onClick={() => setDatasetKind('text')}
+                  >
+                    Text (chat JSONL)
+                  </Button>
+                  <Button
+                    variant={datasetKind === 'video' ? 'default' : 'secondary'}
+                    onClick={() => setDatasetKind('video')}
+                  >
+                    Video (vision-language)
+                  </Button>
+                </div>
+                {datasetKind === 'video' && (
+                  <p className="text-xs text-amber-300">
+                    Real vision-language fine-tuning. Needs ffmpeg installed for real frame extraction, a separate
+                    Python environment, and GGUF/Ollama/smoke-test are not available yet for these models (see below).
+                  </p>
+                )}
+              </div>
+
               <div className="space-y-2">
                 <Label>Model name</Label>
                 <Input value={name} onChange={(e) => setName(e.target.value)} />
               </div>
 
-              <div className="space-y-2">
-                <Label>Base model</Label>
-                <Select value={model} onValueChange={setModel}>
-                  {baseModelOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </Select>
-                {model === 'custom' && (
-                  <Input
-                    value={customModel}
-                    onChange={(e) => setCustomModel(e.target.value)}
-                    placeholder="e.g. org-name/model-name"
-                    className="mt-2"
-                  />
-                )}
-              </div>
-
-              <div className="space-y-2 md:col-span-2">
-                <Label>Training data file</Label>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Input value={dataset ? `${dataset.name} (${dataset.sizeBytes} bytes)` : ''} readOnly placeholder="No file picked yet" />
-                  <input
-                    ref={datasetFileInput}
-                    type="file"
-                    accept=".jsonl,application/jsonl,application/x-ndjson"
-                    className="sr-only"
-                    onChange={chooseDatasetFile}
-                  />
-                  <Button variant="secondary" onClick={() => datasetFileInput.current?.click()} disabled={uploading}>
-                    <Upload className="mr-2 h-4 w-4" />
-                    {uploading ? 'Uploading...' : 'Browse files'}
-                  </Button>
-                  <Button variant="ghost" className="border border-slate-800" onClick={validateDataset} disabled={!dataset || validating}>
-                    <FileCheck2 className="mr-2 h-4 w-4" />
-                    {validating ? 'Checking...' : 'Check this file'}
-                  </Button>
+              {datasetKind === 'video' ? (
+                <div className="space-y-2">
+                  <Label>Base video-language model</Label>
+                  <Select value={videoModel} onValueChange={setVideoModel}>
+                    {videoModelOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                  {videoModel === 'custom' && (
+                    <Input
+                      value={customVideoModel}
+                      onChange={(e) => setCustomVideoModel(e.target.value)}
+                      placeholder="e.g. org-name/model-name"
+                      className="mt-2"
+                    />
+                  )}
                 </div>
-                <p className="text-xs text-slate-400">
-                  "Browse files" opens your real file manager and really uploads the file to the local backend on this laptop.
-                </p>
-                <Select value="" onValueChange={chooseSampleDataset} aria-label="Choose a sample data file">
-                  <SelectItem value="" disabled>
-                    Or pick a real sample data file from this repo
-                  </SelectItem>
-                  {samples.map((sample) => (
-                    <SelectItem key={sample.path} value={sample.path}>
-                      {sample.name} ({sample.sizeBytes} bytes)
-                    </SelectItem>
-                  ))}
-                </Select>
-                {validation && (
-                  <div
-                    className={`rounded-lg border p-2 text-xs ${
-                      validation.ok ? 'border-emerald-800 bg-emerald-950/30 text-emerald-300' : 'border-red-800 bg-red-950/30 text-red-300'
-                    }`}
-                  >
-                    {validation.ok ? (
-                      <span>
-                        Real check passed: {validation.valid_records}/{validation.total_records} records are valid.
-                      </span>
-                    ) : (
-                      <div>
-                        <p>
-                          Real check found problems: {validation.invalid_records}/{validation.total_records} records failed.
-                        </p>
-                        <ul className="mt-1 list-disc pl-4">
-                          {validation.errors?.slice(0, 5).map((err) => (
-                            <li key={err}>{err}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
+              ) : (
+                <div className="space-y-2">
+                  <Label>Base model</Label>
+                  <Select value={model} onValueChange={setModel}>
+                    {baseModelOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                  {model === 'custom' && (
+                    <Input
+                      value={customModel}
+                      onChange={(e) => setCustomModel(e.target.value)}
+                      placeholder="e.g. org-name/model-name"
+                      className="mt-2"
+                    />
+                  )}
+                </div>
+              )}
+
+              {datasetKind === 'video' ? (
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Video manifest + clips</Label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      value={videoManifestFile ? videoManifestFile.name : ''}
+                      readOnly
+                      placeholder="No manifest picked yet"
+                    />
+                    <input
+                      ref={videoManifestInput}
+                      type="file"
+                      accept=".jsonl,application/jsonl,application/x-ndjson"
+                      className="sr-only"
+                      onChange={chooseVideoManifestFile}
+                    />
+                    <Button variant="secondary" onClick={() => videoManifestInput.current?.click()}>
+                      <Upload className="mr-2 h-4 w-4" />
+                      Browse manifest
+                    </Button>
                   </div>
-                )}
-              </div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      value={videoClipFiles.length ? `${videoClipFiles.length} video file(s) picked` : ''}
+                      readOnly
+                      placeholder="No video clips picked yet"
+                    />
+                    <input
+                      ref={videoClipsInput}
+                      type="file"
+                      accept=".mp4,.mov,.mkv,.webm,.avi,.m4v,.mpeg,.mpg,video/*"
+                      multiple
+                      className="sr-only"
+                      onChange={chooseVideoClipFiles}
+                    />
+                    <Button variant="secondary" onClick={() => videoClipsInput.current?.click()}>
+                      <Upload className="mr-2 h-4 w-4" />
+                      Browse video clips
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="border border-slate-800"
+                      onClick={uploadVideoDataset}
+                      disabled={uploading || !videoManifestFile || videoClipFiles.length === 0}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      {uploading ? 'Uploading...' : 'Upload dataset'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="border border-slate-800"
+                      onClick={validateDataset}
+                      disabled={!dataset || validating}
+                    >
+                      <FileCheck2 className="mr-2 h-4 w-4" />
+                      {validating ? 'Checking...' : 'Check this dataset'}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Manifest is a real JSONL file where each line has <code>video</code> (a clip filename), and{' '}
+                    <code>messages</code> (system/user/assistant chat turns describing that clip). Pick the real
+                    manifest, then every real video clip file it references, then "Upload dataset".
+                  </p>
+                  {dataset?.videoCount && (
+                    <p className="text-xs text-emerald-300">
+                      Uploaded: "{dataset.name}" referencing {dataset.videoCount} real video file(s) at{' '}
+                      {dataset.videosDir}.
+                    </p>
+                  )}
+                  {validation && (
+                    <div
+                      className={`rounded-lg border p-2 text-xs ${
+                        validation.ok
+                          ? 'border-emerald-800 bg-emerald-950/30 text-emerald-300'
+                          : 'border-red-800 bg-red-950/30 text-red-300'
+                      }`}
+                    >
+                      {validation.ok ? (
+                        <span>
+                          Real check passed: {validation.valid_records}/{validation.total_records} records are valid.
+                        </span>
+                      ) : (
+                        <div>
+                          <p>
+                            Real check found problems: {validation.invalid_records}/{validation.total_records} records
+                            failed.
+                          </p>
+                          <ul className="mt-1 list-disc pl-4">
+                            {validation.errors?.slice(0, 5).map((err) => (
+                              <li key={err}>{err}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Training data file</Label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input value={dataset ? `${dataset.name} (${dataset.sizeBytes} bytes)` : ''} readOnly placeholder="No file picked yet" />
+                    <input
+                      ref={datasetFileInput}
+                      type="file"
+                      accept=".jsonl,application/jsonl,application/x-ndjson"
+                      className="sr-only"
+                      onChange={chooseDatasetFile}
+                    />
+                    <Button variant="secondary" onClick={() => datasetFileInput.current?.click()} disabled={uploading}>
+                      <Upload className="mr-2 h-4 w-4" />
+                      {uploading ? 'Uploading...' : 'Browse files'}
+                    </Button>
+                    <Button variant="ghost" className="border border-slate-800" onClick={validateDataset} disabled={!dataset || validating}>
+                      <FileCheck2 className="mr-2 h-4 w-4" />
+                      {validating ? 'Checking...' : 'Check this file'}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    "Browse files" opens your real file manager and really uploads the file to the local backend on this laptop.
+                  </p>
+                  <Select value="" onValueChange={chooseSampleDataset} aria-label="Choose a sample data file">
+                    <SelectItem value="" disabled>
+                      Or pick a real sample data file from this repo
+                    </SelectItem>
+                    {samples.map((sample) => (
+                      <SelectItem key={sample.path} value={sample.path}>
+                        {sample.name} ({sample.sizeBytes} bytes)
+                      </SelectItem>
+                    ))}
+                  </Select>
+                  {validation && (
+                    <div
+                      className={`rounded-lg border p-2 text-xs ${
+                        validation.ok ? 'border-emerald-800 bg-emerald-950/30 text-emerald-300' : 'border-red-800 bg-red-950/30 text-red-300'
+                      }`}
+                    >
+                      {validation.ok ? (
+                        <span>
+                          Real check passed: {validation.valid_records}/{validation.total_records} records are valid.
+                        </span>
+                      ) : (
+                        <div>
+                          <p>
+                            Real check found problems: {validation.invalid_records}/{validation.total_records} records failed.
+                          </p>
+                          <ul className="mt-1 list-disc pl-4">
+                            {validation.errors?.slice(0, 5).map((err) => (
+                              <li key={err}>{err}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
-              <div className="space-y-2">
-                <Label>Max length</Label>
-                <Input value={maxLength} onChange={(e) => setMaxLength(e.target.value)} />
-              </div>
+              {datasetKind === 'video' ? (
+                <>
+                  <div className="space-y-2">
+                    <Label>Max frames per clip</Label>
+                    <Input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Sampling FPS</Label>
+                    <Input value={fps} onChange={(e) => setFps(e.target.value)} />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <Label>Max length</Label>
+                    <Input value={maxLength} onChange={(e) => setMaxLength(e.target.value)} />
+                  </div>
 
-              <div className="space-y-2">
-                <Label>Batch size</Label>
-                <Input value={batchSize} onChange={(e) => setBatchSize(e.target.value)} />
-              </div>
+                  <div className="space-y-2">
+                    <Label>Batch size</Label>
+                    <Input value={batchSize} onChange={(e) => setBatchSize(e.target.value)} />
+                  </div>
+                </>
+              )}
 
               <div className="space-y-2">
                 <Label>Grad. steps</Label>
@@ -635,18 +915,29 @@ export default function App() {
               <CardTitle>Steps to run</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {stages.map((stage) => (
-                <motion.div key={stage.id} layout className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950 px-3 py-2">
-                  <div className="flex items-center gap-3">
-                    <Checkbox checked={stage.selected} onChange={() => toggleStage(stage.id)} />
-                    <span className="text-sm text-slate-200">{stage.name}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {statusIcon(stage.status)}
-                    <span className="text-xs uppercase tracking-wide text-slate-400">{stage.status}</span>
-                  </div>
-                </motion.div>
-              ))}
+              {stages.map((stage) => {
+                const videoUnsupported = datasetKind === 'video' && VIDEO_UNSUPPORTED_STAGE_IDS.has(stage.id);
+                return (
+                  <motion.div
+                    key={stage.id}
+                    layout
+                    className={`flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 ${videoUnsupported ? 'opacity-40' : ''}`}
+                    title={videoUnsupported ? 'Not available for video models yet: llama.cpp/GGUF has no export path for this vision-language architecture.' : undefined}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Checkbox checked={stage.selected} onChange={() => toggleStage(stage.id)} className={videoUnsupported ? 'cursor-not-allowed' : ''} />
+                      <span className="text-sm text-slate-200">
+                        {stage.name}
+                        {videoUnsupported && <span className="ml-2 text-xs text-amber-400">(text-only for now)</span>}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {statusIcon(stage.status)}
+                      <span className="text-xs uppercase tracking-wide text-slate-400">{stage.status}</span>
+                    </div>
+                  </motion.div>
+                );
+              })}
             </CardContent>
           </Card>
 

@@ -1,13 +1,11 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { runSystemCheck } from './systemCheck.js';
+import { scriptsRoot, workspaceRoot } from './runtimePaths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, '..');
-const SCRIPTS_DIR = path.join(REPO_ROOT, 'scripts');
-const VENV_DIR = path.join(REPO_ROOT, '.venv-training');
+const VENV_DIR = path.join(workspaceRoot, '.venv-training');
+const VIDEO_VENV_DIR = path.join(workspaceRoot, '.venv-training-video');
 
 export const runs = new Map();
 
@@ -36,7 +34,7 @@ function runStageProcess(run, stage, command, args, options = {}) {
 
     let child;
     try {
-      child = spawn(command, args, { cwd: REPO_ROOT, windowsHide: true, ...options });
+      child = spawn(command, args, { cwd: workspaceRoot, windowsHide: true, ...options });
     } catch (error) {
       emitEvent(run, {
         type: 'stage-log',
@@ -91,25 +89,83 @@ const venvPythonBin =
   process.platform === 'win32'
     ? path.join(VENV_DIR, 'Scripts', 'python.exe')
     : path.join(VENV_DIR, 'bin', 'python');
+const videoVenvPythonBin =
+  process.platform === 'win32'
+    ? path.join(VIDEO_VENV_DIR, 'Scripts', 'python.exe')
+    : path.join(VIDEO_VENV_DIR, 'bin', 'python');
+
+// The video pipeline uses its own venv (see prepare_env.py's --modality flag)
+// because it needs a newer, incompatible transformers version than the text
+// pipeline. Every stage after "prepare" must run inside the right venv for
+// whichever modality this run's dataset actually is.
+function pythonBinFor(config) {
+  return config.datasetKind === 'video' ? videoVenvPythonBin : venvPythonBin;
+}
 
 // Each stage maps to a REAL command. Stages that have real hard prerequisites
 // (GPU, WSL2, llama.cpp) run a real preflight check first and honestly fail,
 // with a real explanatory message, if the prerequisite is not present. Nothing
 // here fakes success.
 function buildStageCommand(stage, config) {
+  const isVideo = config.datasetKind === 'video';
+  const stagePythonBin = pythonBinFor(config);
+
   switch (stage.id) {
     case 'validate':
-      return { command: pythonBin, args: [path.join(SCRIPTS_DIR, 'validate_dataset.py'), config.datasetPath] };
+      if (isVideo) {
+        return {
+          command: pythonBin,
+          args: [
+            path.join(scriptsRoot, 'validate_video_dataset.py'),
+            config.datasetPath,
+            '--videos-dir',
+            config.videosDir,
+          ],
+        };
+      }
+      return { command: pythonBin, args: [path.join(scriptsRoot, 'validate_dataset.py'), config.datasetPath] };
     case 'prepare':
       return {
         command: pythonBin,
-        args: [path.join(SCRIPTS_DIR, 'prepare_env.py'), '--backend', config.recommendedBackend || 'cpu', '--install'],
+        args: [
+          path.join(scriptsRoot, 'prepare_env.py'),
+          '--backend',
+          config.recommendedBackend || 'cpu',
+          '--modality',
+          isVideo ? 'video' : 'text',
+          '--install',
+        ],
       };
     case 'train':
+      if (isVideo) {
+        return {
+          command: stagePythonBin,
+          args: [
+            path.join(scriptsRoot, 'train_video_vl.py'),
+            '--manifest',
+            config.datasetPath,
+            '--videos-dir',
+            config.videosDir,
+            '--model',
+            config.model,
+            '--max-frames',
+            String(config.quickTraining ? Math.min(Number(config.maxFrames) || 8, 4) : config.maxFrames || 8),
+            '--fps',
+            String(config.fps || 1),
+            '--grad-accum',
+            String(config.quickTraining ? 1 : config.gradAccum),
+            '--rank',
+            String(config.rank),
+            '--output-name',
+            config.name,
+            ...(config.quickTraining ? ['--max-steps', '1', '--sample-size', '4'] : []),
+          ],
+        };
+      }
       return {
-        command: venvPythonBin,
+        command: stagePythonBin,
         args: [
-          path.join(SCRIPTS_DIR, 'train_qlora.py'),
+          path.join(scriptsRoot, 'train_qlora.py'),
           '--dataset',
           config.datasetPath,
           '--model',
@@ -128,17 +184,17 @@ function buildStageCommand(stage, config) {
         ],
       };
     case 'evaluate':
-      return { command: venvPythonBin, args: [path.join(SCRIPTS_DIR, 'evaluate_adapter.py'), '--output-name', config.name] };
+      return { command: stagePythonBin, args: [path.join(scriptsRoot, 'evaluate_adapter.py'), '--output-name', config.name] };
     case 'merge':
-      return { command: venvPythonBin, args: [path.join(SCRIPTS_DIR, 'merge_adapter.py'), '--output-name', config.name] };
+      return { command: stagePythonBin, args: [path.join(scriptsRoot, 'merge_adapter.py'), '--output-name', config.name] };
     case 'convert':
-      return { command: venvPythonBin, args: [path.join(SCRIPTS_DIR, 'convert_to_gguf.py'), '--output-name', config.name] };
+      return { command: stagePythonBin, args: [path.join(scriptsRoot, 'convert_to_gguf.py'), '--output-name', config.name] };
     case 'quantize':
-      return { command: venvPythonBin, args: [path.join(SCRIPTS_DIR, 'quantize_gguf.py'), '--output-name', config.name] };
+      return { command: stagePythonBin, args: [path.join(scriptsRoot, 'quantize_gguf.py'), '--output-name', config.name] };
     case 'ollama':
-      return { command: venvPythonBin, args: [path.join(SCRIPTS_DIR, 'register_ollama.py'), '--output-name', config.name] };
+      return { command: stagePythonBin, args: [path.join(scriptsRoot, 'register_ollama.py'), '--output-name', config.name] };
     case 'smoke':
-      return { command: venvPythonBin, args: [path.join(SCRIPTS_DIR, 'smoke_test.py'), '--output-name', config.name] };
+      return { command: stagePythonBin, args: [path.join(scriptsRoot, 'smoke_test.py'), '--output-name', config.name] };
     default:
       return null;
   }

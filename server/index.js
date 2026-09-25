@@ -7,11 +7,10 @@ import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import { runSystemCheck } from './systemCheck.js';
 import { startPipelineRun, runs } from './pipeline.js';
+import { samplesRoot, scriptsRoot, workspaceRoot } from './runtimePaths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, '..');
-const UPLOADS_DIR = path.join(REPO_ROOT, 'uploads');
-const SAMPLES_DIR = path.join(REPO_ROOT, 'samples');
+const UPLOADS_DIR = path.join(workspaceRoot, 'uploads');
 
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
@@ -40,11 +39,11 @@ app.get('/api/system-check', async (_req, res) => {
 // Real list of sample dataset files that actually exist on disk.
 app.get('/api/samples', (_req, res) => {
   try {
-    const files = fs.readdirSync(SAMPLES_DIR).filter((name) => name.endsWith('.jsonl'));
+    const files = fs.readdirSync(samplesRoot).filter((name) => name.endsWith('.jsonl'));
     res.json({
       ok: true,
       samples: files.map((name) => {
-        const fullPath = path.join(SAMPLES_DIR, name);
+        const fullPath = path.join(samplesRoot, name);
         const stats = fs.statSync(fullPath);
         return { name, path: fullPath, sizeBytes: stats.size };
       }),
@@ -95,10 +94,83 @@ app.post('/api/upload-dataset', upload.single('file'), (req, res) => {
   res.json({ ok: true, path: finalPath, sizeBytes: req.file.size });
 });
 
+// Real video dataset upload — writes the manifest .jsonl and every uploaded
+// video file to a real per-upload folder on disk, then reports back where
+// they actually landed (used by validate/train stages via --videos-dir).
+const VIDEO_UPLOADS_DIR = path.join(UPLOADS_DIR, 'video-datasets');
+fs.mkdirSync(VIDEO_UPLOADS_DIR, { recursive: true });
+
+const videoUpload = multer({ dest: path.join(UPLOADS_DIR, 'tmp-video') });
+fs.mkdirSync(path.join(UPLOADS_DIR, 'tmp-video'), { recursive: true });
+
+const ALLOWED_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v', '.mpeg', '.mpg']);
+
+app.post(
+  '/api/upload-video-dataset',
+  videoUpload.fields([
+    { name: 'manifest', maxCount: 1 },
+    { name: 'videos', maxCount: 500 },
+  ]),
+  (req, res) => {
+    const manifestFile = req.files?.manifest?.[0];
+    const videoFiles = req.files?.videos || [];
+
+    if (!manifestFile) {
+      res.status(400).json({ ok: false, error: 'No manifest file was uploaded (expected field name "manifest").' });
+      return;
+    }
+    if (!manifestFile.originalname.toLowerCase().endsWith('.jsonl')) {
+      res.status(400).json({ ok: false, error: 'The manifest must be a .jsonl file.' });
+      return;
+    }
+    if (videoFiles.length === 0) {
+      res.status(400).json({ ok: false, error: 'No video files were uploaded (expected field name "videos").' });
+      return;
+    }
+
+    const badVideo = videoFiles.find(
+      (file) => !ALLOWED_VIDEO_EXTENSIONS.has(path.extname(file.originalname).toLowerCase())
+    );
+    if (badVideo) {
+      res.status(400).json({
+        ok: false,
+        error: `'${badVideo.originalname}' has an unsupported video extension. Supported: ${[...ALLOWED_VIDEO_EXTENSIONS].join(', ')}.`,
+      });
+      return;
+    }
+
+    const uploadId = crypto.randomUUID();
+    const destDir = path.join(VIDEO_UPLOADS_DIR, uploadId);
+    const videosDir = path.join(destDir, 'videos');
+    fs.mkdirSync(videosDir, { recursive: true });
+
+    try {
+      const manifestDestPath = path.join(destDir, 'manifest.jsonl');
+      fs.renameSync(manifestFile.path, manifestDestPath);
+
+      for (const file of videoFiles) {
+        fs.renameSync(file.path, path.join(videosDir, file.originalname));
+      }
+
+      res.json({
+        ok: true,
+        manifestPath: manifestDestPath,
+        videosDir,
+        videoCount: videoFiles.length,
+      });
+    } catch (error) {
+      res.status(500).json({ ok: false, error: `Could not save the uploaded video dataset: ${error.message}` });
+    }
+  }
+);
+
 // Real dataset validation — actually runs the Python validator against a
-// real file path and returns the real per-line result.
+// real file path and returns the real per-line result. Dispatches to the
+// video-manifest validator when kind === 'video', since the schema and
+// per-file checks (video extension, existence, ffprobe) differ from the
+// plain text/chat JSONL validator.
 app.post('/api/validate-dataset', async (req, res) => {
-  const { datasetPath } = req.body;
+  const { datasetPath, kind, videosDir } = req.body;
   if (!datasetPath || !fs.existsSync(datasetPath)) {
     res.status(400).json({ ok: false, error: `File not found: ${datasetPath}` });
     return;
@@ -106,7 +178,11 @@ app.post('/api/validate-dataset', async (req, res) => {
 
   const { spawn } = await import('node:child_process');
   const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
-  const child = spawn(pythonBin, [path.join(REPO_ROOT, 'scripts', 'validate_dataset.py'), datasetPath], {
+  const scriptArgs =
+    kind === 'video'
+      ? [path.join(scriptsRoot, 'validate_video_dataset.py'), datasetPath, '--videos-dir', videosDir]
+      : [path.join(scriptsRoot, 'validate_dataset.py'), datasetPath];
+  const child = spawn(pythonBin, scriptArgs, {
     windowsHide: true,
   });
 
@@ -182,7 +258,20 @@ app.use((error, _req, res, _next) => {
   }
 });
 
-const PORT = process.env.PORT || 8787;
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Model trainer backend really running at http://127.0.0.1:${PORT}`);
-});
+export function startServer({ port = process.env.PORT || 8787, host = '127.0.0.1' } = {}) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port, host, () => {
+      const address = server.address();
+      console.log(`Model trainer backend running at http://${host}:${address.port}`);
+      resolve(server);
+    });
+    server.once('error', reject);
+  });
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__dirname, 'index.js')) {
+  startServer().catch((error) => {
+    console.error('Could not start the model trainer backend:', error);
+    process.exitCode = 1;
+  });
+}

@@ -1,8 +1,4 @@
-param(
-  [int]$FrontendPort = 3000,
-  [int]$BackendPort = 8787,
-  [switch]$NoBrowser
-)
+param([switch]$BuildOnly)
 
 $ErrorActionPreference = 'Stop'
 
@@ -30,27 +26,40 @@ Assert-Command -Name 'npm' -InstallHint 'Install Node.js 20+ from https://nodejs
 Assert-Command -Name 'python' -InstallHint 'Install Python 3.11 and ensure python.exe is on PATH.'
 
 npm run install:all
-npm run build
+npm run desktop:package
 
-$backendCommand = "Set-Location '$repoRoot'; `$env:PORT='$BackendPort'; npm run dev:server"
-$frontendCommand = "Set-Location '$repoRoot'; npx vite --host 127.0.0.1 --port $FrontendPort"
+$launcher = Get-ChildItem -Path (Join-Path $repoRoot 'release') -Filter 'Local Model Lab.exe' -Recurse |
+  Where-Object { $_.FullName -match 'win-.+-unpacked' } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
 
-Write-Host "Starting backend at http://127.0.0.1:$BackendPort"
-Start-Process powershell.exe -ArgumentList @('-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', $backendCommand)
+if (-not $launcher) {
+  throw "Desktop packaging finished but no unpacked launcher was found under '$repoRoot\release'."
+}
 
-Start-Sleep -Seconds 2
+$shell = New-Object -ComObject WScript.Shell
+$desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Local Model Lab.lnk'
+$startMenuDir = Join-Path ([Environment]::GetFolderPath('Programs')) 'Local Model Lab'
+$startMenuShortcut = Join-Path $startMenuDir 'Local Model Lab.lnk'
+New-Item -ItemType Directory -Path $startMenuDir -Force | Out-Null
 
-Write-Host "Starting frontend at http://127.0.0.1:$FrontendPort"
-Start-Process powershell.exe -ArgumentList @('-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', $frontendCommand)
-
-if (-not $NoBrowser) {
-  Start-Sleep -Seconds 3
-  Start-Process "http://127.0.0.1:$FrontendPort"
+foreach ($shortcutPath in @($desktopShortcut, $startMenuShortcut)) {
+  $shortcut = $shell.CreateShortcut($shortcutPath)
+  $shortcut.TargetPath = $launcher.FullName
+  $shortcut.WorkingDirectory = $launcher.DirectoryName
+  $shortcut.Description = 'Launch Local Model Lab'
+  $shortcut.Save()
 }
 
 Write-Host ""
-Write-Host "Local Model Lab deployment started."
-Write-Host "Frontend: http://127.0.0.1:$FrontendPort"
-Write-Host "Backend:  http://127.0.0.1:$BackendPort"
-Write-Host ""
-Write-Host "The training pipeline still creates its Python ML environment during the app's Prepare environment stage."
+Write-Host "Local Model Lab desktop launcher created:"
+Write-Host $launcher.FullName
+Write-Host "Desktop shortcut:"
+Write-Host $desktopShortcut
+Write-Host "Start menu shortcut:"
+Write-Host $startMenuShortcut
+Write-Host "Launch Local Model Lab by double-clicking either shortcut."
+
+if (-not $BuildOnly) {
+  Start-Process -FilePath $launcher.FullName
+}
