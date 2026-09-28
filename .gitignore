@@ -25,6 +25,7 @@ onnx/
 onnxruntime_profile__*.json
 
 # Local/runtime files
+active-agent-model.json
 *.log
 *.tmp
 *.local

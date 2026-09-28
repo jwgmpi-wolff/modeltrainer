@@ -40,6 +40,7 @@
     },
     "files": [
       "dist/**/*",
+      "build/**/*",
       "electron/**/*",
       "server/**/*.js",
       "server/package.json",
@@ -62,6 +63,8 @@
         ]
       }
     ],
-    "win": {}
+    "win": {
+      "icon": "build/icon.ico"
+    }
   }
 }

@@ -15,6 +15,16 @@ The project standard is explicit: **do not build mockups for pipeline behavior**
 - Validates the dataset line by line with a real Python validator.
 - Prepares a real `.venv-training` virtual environment and installs real ML dependencies.
 - Runs real LoRA/QLoRA fine-tuning.
+- Saves complete Hugging Face Trainer checkpoints every 10 optimizer steps,
+  retains the 10 newest checkpoints, and safely resumes adapter, optimizer,
+  scheduler, RNG, and global-step state after compatibility validation.
+- Streams structured, determinate training-stage and optimizer-step progress and
+  persists the complete process output to `output/<model-name>/training.log`.
+- Separately discovers and activates a completed adapter or checkpoint adapter
+  for post-training agent/inference use; this selection is independent of the
+  base model being fine-tuned.
+- Runs a real accelerator self-test: a DirectML LoRA update on the Windows GPU
+  plus a profiled ONNX graph on the Qualcomm QNN/Hexagon NPU.
 - Evaluates whether adapter artifacts exist.
 - Merges the adapter into a real Hugging Face model directory.
 - Converts to GGUF with a real `llama.cpp` checkout.
@@ -121,8 +131,14 @@ http://127.0.0.1:3000
 3. Pick a model. Start with `Qwen 2.5 Coder 1.5B Instruct` for DirectML systems.
 4. Pick a `.jsonl` data file with **Browse files**, or choose a real sample from `samples/`.
 5. Keep **Quick smoke training** enabled for the first proof run.
-6. Press **Run now**.
-7. Watch **Real command output**. The UI status is driven by real child-process exit codes.
+6. Choose **Start new training**, or click **Refresh** and select a compatible
+   checkpoint to resume.
+7. Press **Run now**.
+8. Watch the determinate progress meter and **Real command output**. Progress
+   comes from structured trainer callbacks rather than elapsed-time estimates.
+9. After training, use **Post-training Agent / Inference model** to activate the
+   adapter an agent should use. The **Base model** field remains a training-only
+   choice.
 
 ## Dataset format
 

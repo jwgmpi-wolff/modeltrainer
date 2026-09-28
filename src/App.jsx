@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Bot,
   CheckCircle2,
   Circle,
   Cpu,
@@ -192,11 +193,14 @@ export default function App() {
   const [batchSize, setBatchSize] = useState('1');
   const [gradAccum, setGradAccum] = useState('16');
   const [rank, setRank] = useState('32');
+  const [epochs, setEpochs] = useState('3');
+  const [learningRate, setLearningRate] = useState('0.0002');
   const [quickTraining, setQuickTraining] = useState(true);
   const [stages, setStages] = useState(initialStages);
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState(['Pipeline ready. Connecting to the local backend...']);
   const [progress, setProgress] = useState(0);
+  const [progressText, setProgressText] = useState('Not started');
   const [systemCheck, setSystemCheck] = useState(null);
   const [backendOnline, setBackendOnline] = useState(null); // null = checking, true/false = known
   const [samples, setSamples] = useState([]);
@@ -210,6 +214,16 @@ export default function App() {
   const [fps, setFps] = useState('1');
   const [videoManifestFile, setVideoManifestFile] = useState(null); // File object, not yet uploaded
   const [videoClipFiles, setVideoClipFiles] = useState([]); // FileList/array, not yet uploaded
+  const [checkpoints, setCheckpoints] = useState([
+    { path: '', displayName: 'Start new training', step: null, savedAt: null },
+  ]);
+  const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
+  const [refreshingCheckpoints, setRefreshingCheckpoints] = useState(false);
+  const [agentModels, setAgentModels] = useState([]);
+  const [selectedAgentModel, setSelectedAgentModel] = useState('');
+  const [activeAgentModel, setActiveAgentModel] = useState(null);
+  const [refreshingAgentModels, setRefreshingAgentModels] = useState(false);
+  const [selfTesting, setSelfTesting] = useState(false);
   const datasetFileInput = useRef(null);
   const videoManifestInput = useRef(null);
   const videoClipsInput = useRef(null);
@@ -220,7 +234,7 @@ export default function App() {
     ? (videoModel === 'custom' ? customVideoModel.trim() : videoModel)
     : (model === 'custom' ? customModel.trim() : model);
 
-  const appendLog = (line) => setLogs((old) => [...old.slice(-40), line]);
+  const appendLog = (line) => setLogs((old) => [...old.slice(-1999), line]);
 
   const runSystemCheck = async () => {
     try {
@@ -255,13 +269,100 @@ export default function App() {
     }
   };
 
+  const refreshCheckpoints = async () => {
+    if (!name.trim()) return;
+    setRefreshingCheckpoints(true);
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/checkpoints?outputName=${encodeURIComponent(name.trim())}`,
+      );
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      setCheckpoints(result.checkpoints);
+      setSelectedCheckpoint((current) =>
+        result.checkpoints.some((checkpoint) => checkpoint.path === current) ? current : '',
+      );
+      appendLog(`CHECKPOINTS: Found ${Math.max(0, result.checkpoints.length - 1)} resumable checkpoint(s).`);
+    } catch (error) {
+      appendLog(`ERROR: Could not refresh checkpoints. (${error.message})`);
+    } finally {
+      setRefreshingCheckpoints(false);
+    }
+  };
+
+  const refreshAgentModels = async () => {
+    setRefreshingAgentModels(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/agent-models`);
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      setAgentModels(result.models);
+      setActiveAgentModel(result.activeModel);
+      setSelectedAgentModel((current) =>
+        result.models.some((candidate) => candidate.adapterPath === current)
+          ? current
+          : result.activeModel?.adapterPath || result.models[0]?.adapterPath || '',
+      );
+    } catch (error) {
+      appendLog(`ERROR: Could not discover post-training models. (${error.message})`);
+    } finally {
+      setRefreshingAgentModels(false);
+    }
+  };
+
+  const activateAgentModel = async () => {
+    if (!selectedAgentModel) {
+      appendLog('ERROR: Select a trained adapter for agent/inference use first.');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/agent-models/activate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adapterPath: selectedAgentModel }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      setActiveAgentModel(result.activeModel);
+      appendLog(
+        `AGENT MODEL: Activated ${result.activeModel.baseModel} with adapter ${result.activeModel.adapterPath}.`,
+      );
+    } catch (error) {
+      appendLog(`ERROR: Could not activate agent model. (${error.message})`);
+    }
+  };
+
+  const runAcceleratorSelfTest = async () => {
+    setSelfTesting(true);
+    appendLog('ACCELERATOR: Running real DirectML LoRA and Qualcomm QNN workloads...');
+    try {
+      const response = await fetch(`${API_BASE}/api/accelerator-self-test`, { method: 'POST' });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      appendLog(
+        `ACCELERATOR: GPU verified=${result.gpuVerified} (${result.gpuDevice}); ` +
+          `NPU verified=${result.npuVerified} (${result.npuProvider}). ${result.details}`,
+      );
+    } catch (error) {
+      appendLog(`ERROR: Accelerator self-test failed. (${error.message})`);
+    } finally {
+      setSelfTesting(false);
+    }
+  };
+
   useEffect(() => {
     runSystemCheck();
     loadSamples();
+    refreshAgentModels();
     return () => {
       eventSourceRef.current?.close();
     };
   }, []);
+
+  useEffect(() => {
+    setSelectedCheckpoint('');
+    setCheckpoints([{ path: '', displayName: 'Start new training', step: null, savedAt: null }]);
+  }, [name]);
 
   // Video adapters can't go through GGUF/Ollama/smoke-test yet (see the
   // honest refusal in convert_to_gguf.py), so those steps are force-unchecked
@@ -424,6 +525,13 @@ export default function App() {
         appendLog(`START ${data.name}`);
       } else if (data.type === 'stage-log') {
         appendLog(`  ${data.line}`);
+      } else if (data.type === 'training-progress') {
+        setProgress(Math.max(0, Math.min(100, Number(data.percent) || 0)));
+        setProgressText(
+          data.currentStep == null
+            ? `${data.message} (${Number(data.percent).toFixed(1)}%)`
+            : `${data.message} (${Number(data.percent).toFixed(1)}%)`,
+        );
       } else if (data.type === 'stage-end') {
         setStages((old) => old.map((s) => (s.id === data.stageId ? { ...s, status: data.status } : s)));
         appendLog(`${data.status === 'complete' ? 'DONE ' : 'FAILED'} ${data.stageId} (real exit code: ${data.exitCode})`);
@@ -433,6 +541,9 @@ export default function App() {
         const anyFailed = Object.values(data.stageResults).some((status) => status === 'failed');
         appendLog(anyFailed ? `RUN FINISHED WITH REAL FAILURES: ${name}` : `RUN SUCCEEDED FOR REAL: ${name}`);
         setRunning(false);
+        setProgressText(anyFailed ? 'Training or pipeline failed' : 'Pipeline complete');
+        refreshCheckpoints();
+        refreshAgentModels();
         source.close();
       }
     };
@@ -472,6 +583,7 @@ export default function App() {
 
     setRunning(true);
     setProgress(0);
+    setProgressText('Starting dependency and environment checks');
     setStages((old) => old.map((s) => (s.selected ? { ...s, status: 'ready' } : s)));
 
     try {
@@ -492,6 +604,9 @@ export default function App() {
             batchSize: Number(batchSize),
             gradAccum: Number(gradAccum),
             rank: Number(rank),
+            epochs: Number(epochs),
+            learningRate: Number(learningRate),
+            resumeCheckpoint: datasetKind === 'text' ? selectedCheckpoint || null : null,
             quickTraining,
           },
         }),
@@ -829,6 +944,47 @@ export default function App() {
                 <Input value={rank} onChange={(e) => setRank(e.target.value)} />
               </div>
 
+              <div className="space-y-2">
+                <Label>Epochs</Label>
+                <Input value={epochs} onChange={(e) => setEpochs(e.target.value)} />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Learning rate</Label>
+                <Input value={learningRate} onChange={(e) => setLearningRate(e.target.value)} />
+              </div>
+
+              {datasetKind === 'text' && (
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Resume checkpoint</Label>
+                  <div className="flex gap-2">
+                    <Select
+                      value={selectedCheckpoint}
+                      onValueChange={setSelectedCheckpoint}
+                      aria-label="Resume checkpoint"
+                    >
+                      {checkpoints.map((checkpoint) => (
+                        <SelectItem key={checkpoint.path || 'new'} value={checkpoint.path}>
+                          {checkpoint.displayName}
+                        </SelectItem>
+                      ))}
+                    </Select>
+                    <Button
+                      variant="secondary"
+                      onClick={refreshCheckpoints}
+                      disabled={running || refreshingCheckpoints || !name.trim()}
+                    >
+                      <RefreshCw className={`mr-2 h-4 w-4 ${refreshingCheckpoints ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </Button>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Start new training deliberately ignores existing checkpoints. Resumes restore adapter,
+                    optimizer, scheduler, RNG, and completed-step state.
+                  </p>
+                </div>
+              )}
+
               <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300">
                 <input
                   type="checkbox"
@@ -905,9 +1061,67 @@ export default function App() {
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Check this laptop again
               </Button>
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={runAcceleratorSelfTest}
+                disabled={selfTesting}
+              >
+                <Cpu className="mr-2 h-4 w-4" />
+                {selfTesting ? 'Testing real accelerators...' : 'Run real accelerator self-test'}
+              </Button>
             </CardContent>
           </Card>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Bot className="h-5 w-5 text-fuchsia-400" />
+              Post-training Agent / Inference model
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
+            <div>
+              <Label className="mb-2">Trained adapter used by an agent after training</Label>
+              <Select
+                value={selectedAgentModel}
+                onValueChange={setSelectedAgentModel}
+                aria-label="Agent inference model"
+              >
+                <SelectItem value="" disabled>
+                  No trained adapters discovered
+                </SelectItem>
+                {agentModels.map((candidate) => (
+                  <SelectItem key={candidate.adapterPath} value={candidate.adapterPath}>
+                    {candidate.displayName} - {candidate.baseModel}
+                    {candidate.trainingStep ? ` (step ${candidate.trainingStep})` : ''}
+                  </SelectItem>
+                ))}
+              </Select>
+              <p className="mt-2 text-xs text-slate-400">
+                This is independent of the Base model field above, which only chooses what to fine-tune.
+              </p>
+              <p className="mt-1 text-xs text-emerald-300">
+                Active: {activeAgentModel
+                  ? `${activeAgentModel.baseModel} + ${activeAgentModel.adapterPath}`
+                  : 'No post-training model selected'}
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              className="self-end"
+              onClick={refreshAgentModels}
+              disabled={refreshingAgentModels}
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${refreshingAgentModels ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <Button className="self-end" onClick={activateAgentModel} disabled={!selectedAgentModel}>
+              Activate for inference
+            </Button>
+          </CardContent>
+        </Card>
 
         <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
           <Card>
@@ -977,6 +1191,7 @@ export default function App() {
                   <span>{progress}%</span>
                 </div>
                 <Progress value={progress} />
+                <p className="mt-2 text-xs text-slate-400">{progressText}</p>
               </div>
             </CardContent>
           </Card>

@@ -1,6 +1,9 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { promisify } from 'node:util';
+import { workspaceRoot } from './runtimePaths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -57,8 +60,13 @@ function isVirtualGpu(name) {
 }
 
 export async function runSystemCheck() {
+  const localPython =
+    process.platform === 'win32'
+      ? path.join(workspaceRoot, '.venv-training', 'Scripts', 'python.exe')
+      : path.join(workspaceRoot, '.venv-training', 'bin', 'python');
+  const pythonCommand = fs.existsSync(localPython) ? localPython : process.platform === 'win32' ? 'python' : 'python3';
   const [python, ollama, wsl, gpuNames] = await Promise.all([
-    tryCommand('python', ['--version']),
+    tryCommand(pythonCommand, ['--version']),
     tryCommand('ollama', ['--version']),
     tryCommand('wsl', ['--status']),
     detectGpu(),
@@ -108,7 +116,7 @@ export async function runSystemCheck() {
       recommendedBackend,
     },
     tools: {
-      python: python.found ? python.output : null,
+      python: python.found ? `${python.output} (${pythonCommand})` : null,
       ollama: ollama.found ? ollama.output : null,
       wsl: wsl.found ? wsl.output : null,
     },

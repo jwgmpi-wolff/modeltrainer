@@ -30,6 +30,7 @@ async function createWindow() {
     minWidth: 1000,
     minHeight: 700,
     title: 'Local Model Lab',
+    icon: path.join(path.resolve(__dirname, '..'), 'build', 'icon.ico'),
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,

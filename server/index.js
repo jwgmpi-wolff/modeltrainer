@@ -8,6 +8,14 @@ import multer from 'multer';
 import { runSystemCheck } from './systemCheck.js';
 import { startPipelineRun, runs } from './pipeline.js';
 import { samplesRoot, scriptsRoot, workspaceRoot } from './runtimePaths.js';
+import { runAcceleratorSelfTest } from './acceleratorService.js';
+import {
+  activateAgentModel,
+  discoverAgentModels,
+  getActiveAgentModel,
+  listCheckpoints,
+  validateResumeCheckpoint,
+} from './modelArtifacts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOADS_DIR = path.join(workspaceRoot, 'uploads');
@@ -33,6 +41,38 @@ app.get('/api/system-check', async (_req, res) => {
     res.json(result);
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.post('/api/accelerator-self-test', async (_req, res) => {
+  try {
+    res.json({ ok: true, ...(await runAcceleratorSelfTest()) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/checkpoints', (req, res) => {
+  try {
+    res.json({ ok: true, checkpoints: listCheckpoints(String(req.query.outputName || '')) });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/agent-models', (_req, res) => {
+  try {
+    res.json({ ok: true, models: discoverAgentModels(), activeModel: getActiveAgentModel() });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.post('/api/agent-models/activate', (req, res) => {
+  try {
+    res.json({ ok: true, activeModel: activateAgentModel(req.body?.adapterPath) });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
   }
 });
 
@@ -209,9 +249,35 @@ app.post('/api/run', async (req, res) => {
     res.status(400).json({ ok: false, error: `Dataset file not found: ${config?.datasetPath}` });
     return;
   }
+  if (!Array.isArray(stages) || stages.length === 0) {
+    res.status(400).json({ ok: false, error: 'Select at least one pipeline stage.' });
+    return;
+  }
+  if (
+    !Number.isInteger(config.epochs) ||
+    config.epochs <= 0 ||
+    !Number.isInteger(config.batchSize) ||
+    config.batchSize <= 0 ||
+    !Number.isFinite(config.learningRate) ||
+    config.learningRate <= 0
+  ) {
+    res.status(400).json({
+      ok: false,
+      error: 'Epochs and batch size must be positive integers, and learning rate must be positive.',
+    });
+    return;
+  }
+
+  let resumeCheckpoint = null;
+  try {
+    resumeCheckpoint = validateResumeCheckpoint(config.name, config.resumeCheckpoint);
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+    return;
+  }
 
   const runId = crypto.randomUUID();
-  const run = await startPipelineRun(runId, { ...config, stages });
+  const run = await startPipelineRun(runId, { ...config, resumeCheckpoint, stages });
 
   res.json({ ok: true, runId: run.id });
 });
@@ -241,7 +307,13 @@ app.get('/api/run/:runId/events', (req, res) => {
     }
   };
 
+  const history = run.events.slice();
   run.emitter.on('event', listener);
+  history.forEach(send);
+  if (run.done) {
+    run.emitter.off('event', listener);
+    res.end();
+  }
 
   req.on('close', () => {
     run.emitter.off('event', listener);

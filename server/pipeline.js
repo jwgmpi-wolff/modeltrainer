@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
 import path from 'node:path';
+import readline from 'node:readline';
 import { runSystemCheck } from './systemCheck.js';
 import { scriptsRoot, workspaceRoot } from './runtimePaths.js';
+import { getOutputDirectory } from './modelArtifacts.js';
 
 const VENV_DIR = path.join(workspaceRoot, '.venv-training');
 const VIDEO_VENV_DIR = path.join(workspaceRoot, '.venv-training-video');
@@ -11,12 +14,13 @@ export const runs = new Map();
 
 function makeRun(runId) {
   const emitter = new EventEmitter();
-  const run = { id: runId, emitter, stageResults: {}, done: false };
+  const run = { id: runId, emitter, events: [], stageResults: {}, done: false };
   runs.set(runId, run);
   return run;
 }
 
 function emitEvent(run, event) {
+  run.events.push(event);
   run.emitter.emit('event', event);
   if (event.type === 'run-complete') {
     run.done = true;
@@ -46,27 +50,45 @@ function runStageProcess(run, stage, command, args, options = {}) {
       return;
     }
 
-    child.stdout?.on('data', (chunk) => {
-      chunk
-        .toString('utf8')
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .forEach((line) => emitEvent(run, { type: 'stage-log', stageId: stage.id, line }));
-    });
-
-    child.stderr?.on('data', (chunk) => {
-      chunk
-        .toString('utf8')
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .forEach((line) => emitEvent(run, { type: 'stage-log', stageId: stage.id, line: `stderr: ${line}` }));
-    });
+    if (options.logPath) {
+      fs.mkdirSync(path.dirname(options.logPath), { recursive: true });
+    }
+    const logStream = options.logPath
+      ? fs.createWriteStream(options.logPath, { flags: options.appendLog ? 'a' : 'w' })
+      : null;
+    const handleLine = (line, isError = false) => {
+      if (!line) return;
+      logStream?.write(`${isError ? 'stderr: ' : ''}${line}\n`);
+      const eventPrefix = 'MODEL_TRAINER_EVENT|';
+      if (!isError && line.startsWith(eventPrefix)) {
+        try {
+          const event = JSON.parse(line.slice(eventPrefix.length));
+          emitEvent(run, { type: 'training-progress', stageId: stage.id, ...event });
+          emitEvent(run, { type: 'stage-log', stageId: stage.id, line: event.message });
+          return;
+        } catch {
+          // Preserve malformed event output in the log as an ordinary line.
+        }
+      }
+      emitEvent(run, {
+        type: 'stage-log',
+        stageId: stage.id,
+        line: isError ? `stderr: ${line}` : line,
+      });
+    };
+    if (child.stdout) {
+      readline.createInterface({ input: child.stdout }).on('line', (line) => handleLine(line));
+    }
+    if (child.stderr) {
+      readline.createInterface({ input: child.stderr }).on('line', (line) => handleLine(line, true));
+    }
 
     child.on('error', (error) => {
       emitEvent(run, { type: 'stage-log', stageId: stage.id, line: `ERROR: ${error.message}` });
     });
 
     child.on('close', (exitCode) => {
+      logStream?.end();
       const status = exitCode === 0 ? 'complete' : 'failed';
       if (process.platform === 'win32' && exitCode === 3221225477) {
         emitEvent(run, {
@@ -180,6 +202,11 @@ function buildStageCommand(stage, config) {
           String(config.rank),
           '--output-name',
           config.name,
+          '--epochs',
+          String(config.epochs),
+          '--learning-rate',
+          String(config.learningRate),
+          ...(config.resumeCheckpoint ? ['--resume-checkpoint', config.resumeCheckpoint] : []),
           ...(config.quickTraining ? ['--max-steps', '1', '--sample-size', '8'] : []),
         ],
       };
@@ -239,7 +266,12 @@ export async function startPipelineRun(runId, config) {
         break;
       }
 
-      const result = await runStageProcess(run, stage, built.command, built.args);
+      const result = await runStageProcess(run, stage, built.command, built.args, stage.id === 'train'
+        ? {
+            logPath: path.join(getOutputDirectory(runConfig.name), 'training.log'),
+            appendLog: Boolean(runConfig.resumeCheckpoint),
+          }
+        : {});
       run.stageResults[stage.id] = result.status;
 
       if (result.status === 'failed') {
