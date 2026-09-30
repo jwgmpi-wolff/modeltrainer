@@ -73,10 +73,11 @@ Windows GPU notes:
 
 ## Install
 
-From this folder:
+Clone the standalone repository, then install its dependencies:
 
 ```powershell
-cd C:\Users\jerrywolff\Documents\.git\modeltrainer
+git clone https://github.com/jwgmpi-wolff/modeltrainer.git
+cd modeltrainer
 npm run install:all
 ```
 
@@ -92,7 +93,6 @@ The ML Python environment is intentionally created by the real **Prepare environ
 Build the Windows desktop app and create shortcuts:
 
 ```powershell
-cd C:\Users\jerrywolff\Documents\.git\modeltrainer
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-to-local-machine.ps1
 ```
 
@@ -357,18 +357,25 @@ The button above opens the local deployment script in the repo. Run it from Powe
 From a standalone clone:
 
 ```powershell
-git clone https://github.com/jerrywolff_microsoft/modeltrainer.git
+git clone https://github.com/jwgmpi-wolff/modeltrainer.git
 cd modeltrainer
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-to-local-machine.ps1
 ```
 
-From the monorepo:
+From a new monorepo clone, initialize its Model Trainer submodule:
 
 ```powershell
-git clone https://github.com/jwgmpi-wolff/AppsandScripts.git
+git clone --recurse-submodules https://github.com/jwgmpi-wolff/AppsandScripts.git
 cd AppsandScripts\modeltrainer
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-to-local-machine.ps1
 ```
+
+The installer works from any location. It first uses the checkout containing
+the script, then searches the current folder and its parents. If no checkout is
+available (including when the script body is run directly), it clones the
+standalone repository into
+`%LOCALAPPDATA%\Local Model Lab\source`. The old
+`jerrywolff_microsoft/modeltrainer` URL is obsolete.
 
 You can also run the npm wrapper after dependencies are available:
 
@@ -380,11 +387,13 @@ What the local deployment automation really does:
 
 1. Verifies `node`, `npm`, and `python` are on PATH.
 2. Runs `npm run install:all`.
-3. Builds the React frontend.
-4. Packages the frontend and backend together as a Windows desktop application.
-5. Creates `release\win-*-unpacked\Local Model Lab.exe`.
-6. Creates desktop and Start menu shortcuts to that executable.
-7. Opens the desktop app.
+3. Closes only Local Model Lab processes running from this checkout's
+   `release` folder so Windows does not lock the previous package.
+4. Builds the React frontend.
+5. Packages the frontend and backend together as a Windows desktop application.
+6. Creates `release\win-*-unpacked\Local Model Lab.exe`.
+7. Creates desktop and Start menu shortcuts to that executable.
+8. Opens the desktop app.
 
 The training pipeline still creates and installs `.venv-training` during the app's real **Prepare environment** stage because the ML requirements depend on the detected hardware backend.
 
@@ -403,7 +412,6 @@ npm run desktop
 ### Local production preview
 
 ```powershell
-cd C:\Users\jerrywolff\Documents\.git\modeltrainer
 npm run build
 npm run preview
 ```
