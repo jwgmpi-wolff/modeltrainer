@@ -253,6 +253,7 @@ export default function App() {
       appendLog(
         `SYSTEM CHECK: CPU "${result.cpu.model}" (${result.cpu.vendor}), ${result.memory.totalGb} GB RAM, ` +
           `GPU: ${result.gpu.names.join(', ') || 'none detected'}. Python: ${result.tools.python || 'not found'}. ` +
+          `NPU: ${result.npu.names.join(', ') || 'none detected'}. ` +
           `Ollama: ${result.tools.ollama || 'not found'}. WSL: ${result.tools.wsl ? 'installed' : 'not installed'}.`,
       );
     } catch (error) {
@@ -1106,6 +1107,12 @@ export default function App() {
                     <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
                       <span>Graphics</span>
                       <span className="text-right text-slate-400">{systemCheck.gpu.names.join(', ') || 'none detected'}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
+                      <span>NPU inference</span>
+                      <span className="text-right text-slate-400">
+                        {systemCheck.npu.names.join(', ') || 'none detected'}
+                      </span>
                     </div>
                     <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
                       <span>Python</span>

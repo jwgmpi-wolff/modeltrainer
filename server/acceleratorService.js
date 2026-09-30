@@ -8,7 +8,6 @@ function pythonCandidates() {
   const binDirectory = process.platform === 'win32' ? 'Scripts' : 'bin';
   return [
     path.join(workspaceRoot, '.venv-training', binDirectory, executable),
-    path.join(path.dirname(workspaceRoot), 'modeltrainer', '.venv-training', binDirectory, executable),
     process.platform === 'win32' ? 'python' : 'python3',
   ];
 }
@@ -36,7 +35,7 @@ export async function resolveAcceleratorPython() {
     try {
       const probe = await runProcess(candidate, [
         '-c',
-        'import torch,torch_directml,onnx,onnxruntime,onnxruntime_qnn; assert torch_directml.is_available()',
+        'import torch; print(torch.__version__)',
       ]);
       if (probe.exitCode === 0) return candidate;
       failures.push(`${candidate}: ${probe.stderr.trim()}`);

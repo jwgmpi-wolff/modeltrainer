@@ -1,7 +1,9 @@
 {
   "name": "modeltrainer",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "description": "Local fine-tuning and model management desktop application",
+  "author": "Jerry Wolff",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
@@ -12,6 +14,7 @@
     "build": "vite build",
     "desktop": "npm run build && electron .",
     "desktop:package": "npm run build && electron-builder --win --dir",
+    "desktop:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-installer.ps1",
     "preview": "vite preview --host 0.0.0.0",
     "deploy:local": "powershell -ExecutionPolicy Bypass -File scripts/deploy-to-local-machine.ps1",
     "deploy:static": "npm run build",

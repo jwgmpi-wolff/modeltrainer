@@ -59,11 +59,16 @@ modeltrainer/
 Install these before recreating the app:
 
 1. **Node.js 20+** and npm.
-2. **Python 3.11** available as `python` on PATH.
-3. **Git**.
-4. **Ollama** if you want the final register/smoke-test stages.
-5. **CMake and a C++ compiler** if you want to build `llama.cpp` locally for GGUF conversion and quantization.
-6. A Hugging Face account/token if the selected base model requires authentication.
+2. **Git** for source-based installation.
+3. **Ollama** if you want the final register/smoke-test stages.
+4. **CMake and a C++ compiler** if you want to build `llama.cpp` locally for GGUF conversion and quantization.
+5. A Hugging Face account/token if the selected base model requires authentication.
+
+Python does not have to be installed before the desktop app. During environment
+preparation, Model Trainer selects a compatible x64 Python 3.10-3.12 or installs
+a private, signature-verified x64 Python 3.11.9. On Windows ARM, x64 Python runs
+under emulation and is required because PyTorch and DirectML do not publish
+Windows ARM64 training wheels.
 
 Windows GPU notes:
 
@@ -99,6 +104,58 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-to-local-machine.ps1
 This creates `release\win-*-unpacked\Local Model Lab.exe`, adds **Local Model Lab** shortcuts on the desktop and Start menu, and starts the app. Launch the trainer later by double-clicking either shortcut. The app opens in its own desktop window and owns its local training service; it does not open a browser or require terminal windows to remain open.
 
 The desktop app writes generated datasets, environments, adapters, merged models, and GGUF files under the current Windows user's Local Model Lab application-data workspace so packaged program files remain read-only.
+
+### Install on another Windows computer from this repository
+
+The standalone repository is private. On the remote computer, install GitHub
+CLI and Node.js 20+, authenticate to GitHub, then clone and deploy:
+
+```powershell
+winget install --id GitHub.cli
+winget install --id OpenJS.NodeJS.LTS
+gh auth login
+Set-Location $HOME
+gh repo clone jwgmpi-wolff/modeltrainer
+Set-Location .\modeltrainer
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy-to-local-machine.ps1
+```
+
+If those prerequisites are already installed, start at `gh auth login`. The
+deployment command works regardless of the clone's parent folder. It builds the
+app, creates Desktop and Start Menu shortcuts, launches Local Model Lab, and
+fails explicitly if the launched process exits immediately.
+
+### Build registered Windows installers
+
+Create a Windows ARM64 setup executable:
+
+```powershell
+npm run install:all
+npm run desktop:installer
+```
+
+Create an Intel/AMD x64 setup executable with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows-installer.ps1 -Architecture x64
+```
+
+The generated `release\Local Model Lab-Setup-1.0.1-<architecture>.exe`
+installers include the complete packaged desktop application and backend. Each
+installer:
+
+- registers Local Model Lab in Windows **Installed apps** with an uninstaller;
+- applies the Local Model Lab icon to the executable and shortcuts;
+- creates Desktop and Start Menu shortcuts;
+- launches the application after installation.
+
+Use the `x64` installer for Intel/AMD Windows computers and the `arm64`
+installer for Snapdragon/Windows ARM computers. When training is first
+prepared, the app selects a compatible x64 Python 3.10-3.12 interpreter. If
+none exists, it downloads the official Python Software Foundation-signed x64
+Python 3.11.9 installer and creates a private interpreter under the app
+workspace. This is required because Windows PyTorch and DirectML publish x64
+wheels, while Windows ARM runs those tools successfully under x64 emulation.
 
 ## Developer mode
 
@@ -251,6 +308,23 @@ This confirms the video pipeline's manifest validation, frame extraction, proces
 are all genuinely correct end-to-end — the only real issue found was DirectML's lack of Conv3d support, which is now
 handled with an honest CPU fallback instead of a crash.
 
+## GPU training and NPU inference acceleration
+
+Model Trainer follows the hardware pattern verified by Tax Intelligence Studio:
+
+- NVIDIA CUDA performs real 4-bit QLoRA.
+- Windows AMD, Intel, Qualcomm, and non-CUDA NVIDIA GPUs perform real LoRA
+  training through DirectML.
+- Intel XPU and Apple MPS are used where their PyTorch runtimes are available.
+- Qualcomm Hexagon NPUs are verified with the ONNX Runtime QNN provider.
+- Intel NPUs are verified with OpenVINO's `NPU` device.
+- NPUs accelerate inference and validation, not optimizer-based weight
+  training. Training remains on a GPU or CPU.
+
+The accelerator self-test performs ten real AdamW LoRA updates and refuses
+silent CPU fallback. It separately executes a graph on a detected Qualcomm or
+Intel NPU provider.
+
 ## Qualcomm / Snapdragon NPU deployment and INT8 quantization (`scripts/deploy_to_npu.py`)
 
 This is a **standalone script**, not a pipeline stage in the app UI. Run it manually after a merge:
@@ -385,7 +459,7 @@ npm run deploy:local
 
 What the local deployment automation really does:
 
-1. Verifies `node`, `npm`, and `python` are on PATH.
+1. Verifies `node` and `npm` are on PATH.
 2. Runs `npm run install:all`.
 3. Closes only Local Model Lab processes running from this checkout's
    `release` folder so Windows does not lock the previous package.

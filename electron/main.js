@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let apiServer;
+let mainWindow;
 
 function configureRuntimePaths() {
   const appRoot = path.resolve(__dirname, '..');
@@ -24,11 +25,12 @@ async function createWindow() {
   const address = apiServer.address();
   const apiBase = `http://127.0.0.1:${address.port}`;
 
-  const window = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1440,
     height: 960,
     minWidth: 1000,
     minHeight: 700,
+    show: false,
     title: 'Local Model Lab',
     icon: path.join(path.resolve(__dirname, '..'), 'build', 'icon.ico'),
     autoHideMenuBar: true,
@@ -39,7 +41,18 @@ async function createWindow() {
     },
   });
 
-  await window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), {
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.center();
+    mainWindow.show();
+    mainWindow.restore();
+    mainWindow.focus();
+    mainWindow.moveTop();
+  });
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+
+  await mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), {
     query: { apiBase },
   });
 }
@@ -50,10 +63,11 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    const window = BrowserWindow.getAllWindows()[0];
-    if (window) {
-      if (window.isMinimized()) window.restore();
-      window.focus();
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.moveTop();
     }
   });
 

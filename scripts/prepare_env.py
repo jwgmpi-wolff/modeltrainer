@@ -18,6 +18,7 @@ a non-zero status and prints the real pip failure output.
 
 import argparse
 import json
+import platform
 import shutil
 import subprocess
 import sys
@@ -80,7 +81,7 @@ BACKEND_REQUIREMENTS = {
         "  pip install -r requirements-training.txt",
     ),
     "directml": (
-        "torch==2.4.1\ntorchvision==0.19.1\ntorch-directml==0.2.5.dev240914\n",
+        "torch==2.4.1\ntorchvision==0.19.1\ntorch-directml==0.2.5.dev240914\nopenvino\n",
         "This machine's real GPU is not NVIDIA, so this uses Microsoft's real DirectML backend "
         "(supports AMD, Intel, Qualcomm, and NVIDIA GPUs on Windows via DirectX 12):\n"
         "  pip install -r requirements-training.txt\n"
@@ -88,7 +89,7 @@ BACKEND_REQUIREMENTS = {
         "fine-tuning in fp16 on your real GPU instead of 4-bit quantized QLoRA.",
     ),
     "xpu": (
-        "torch\nintel-extension-for-pytorch\n",
+        "torch\nintel-extension-for-pytorch\nopenvino\n",
         "This machine has a real Intel GPU. Install PyTorch plus Intel's real XPU extension:\n"
         "  pip install -r requirements-training.txt",
     ),
@@ -127,6 +128,13 @@ def main():
     )
     args = parser.parse_args()
 
+    if sys.platform == "win32" and platform.machine().lower() not in ("amd64", "x86_64"):
+        raise RuntimeError(
+            f"This Python interpreter is {platform.machine()}. Windows PyTorch and torch-directml publish x64 "
+            "training wheels only. Model Trainer must use x64 Python 3.10-3.12, including under emulation on "
+            "Windows ARM."
+        )
+
     is_video = args.modality == "video"
     venv_dir = VIDEO_VENV_DIR if is_video else VENV_DIR
     requirements_file = VIDEO_REQUIREMENTS_FILE if is_video else REQUIREMENTS_FILE
@@ -158,8 +166,30 @@ def main():
         report["actions"].append(f"Requirements file already up to date at {requirements_file} for backend: {args.backend}")
 
     if venv_dir.exists():
-        report["actions"].append(f"Virtual environment already exists at {venv_dir}")
-    else:
+        existing_python = venv_dir / "Scripts" / "python.exe" if sys.platform == "win32" else venv_dir / "bin" / "python"
+        architecture_result = subprocess.run(
+            [str(existing_python), "-c", "import platform; print(platform.machine())"],
+            capture_output=True,
+            text=True,
+        ) if existing_python.exists() else None
+        incompatible = (
+            architecture_result is None
+            or architecture_result.returncode != 0
+            or (
+                sys.platform == "win32"
+                and architecture_result.stdout.strip().lower() not in ("amd64", "x86_64")
+            )
+        )
+        if incompatible:
+            shutil.rmtree(venv_dir)
+            report["actions"].append(f"Removed incompatible virtual environment at {venv_dir}")
+        else:
+            report["actions"].append(
+                f"Virtual environment already exists at {venv_dir} "
+                f"({architecture_result.stdout.strip()})"
+            )
+
+    if not venv_dir.exists():
         result = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], capture_output=True, text=True)
         if result.returncode != 0:
             report["ok"] = False

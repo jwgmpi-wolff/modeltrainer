@@ -6,6 +6,7 @@ import readline from 'node:readline';
 import { runSystemCheck } from './systemCheck.js';
 import { scriptsRoot, workspaceRoot } from './runtimePaths.js';
 import { getOutputDirectory } from './modelArtifacts.js';
+import { ensureTrainingPython } from './pythonRuntime.js';
 
 const VENV_DIR = path.join(workspaceRoot, '.venv-training');
 const VIDEO_VENV_DIR = path.join(workspaceRoot, '.venv-training-video');
@@ -106,7 +107,6 @@ function runStageProcess(run, stage, command, args, options = {}) {
   });
 }
 
-const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
 const venvPythonBin =
   process.platform === 'win32'
     ? path.join(VENV_DIR, 'Scripts', 'python.exe')
@@ -131,12 +131,13 @@ function pythonBinFor(config) {
 function buildStageCommand(stage, config) {
   const isVideo = config.datasetKind === 'video';
   const stagePythonBin = pythonBinFor(config);
+  const systemPythonBin = config.trainingPython;
 
   switch (stage.id) {
     case 'validate':
       if (isVideo) {
         return {
-          command: pythonBin,
+          command: systemPythonBin,
           args: [
             path.join(scriptsRoot, 'validate_video_dataset.py'),
             config.datasetPath,
@@ -145,10 +146,10 @@ function buildStageCommand(stage, config) {
           ],
         };
       }
-      return { command: pythonBin, args: [path.join(scriptsRoot, 'validate_dataset.py'), config.datasetPath] };
+      return { command: systemPythonBin, args: [path.join(scriptsRoot, 'validate_dataset.py'), config.datasetPath] };
     case 'prepare':
       return {
-        command: pythonBin,
+        command: systemPythonBin,
         args: [
           path.join(scriptsRoot, 'prepare_env.py'),
           '--backend',
@@ -236,6 +237,7 @@ export async function startPipelineRun(runId, config) {
     // "Prepare environment" stage tells pip to install for. Not cached from
     // an earlier page load — queried again right now.
     let recommendedBackend = 'cpu';
+    let trainingPython;
     try {
       const check = await runSystemCheck();
       recommendedBackend = check.gpu.recommendedBackend;
@@ -254,7 +256,25 @@ export async function startPipelineRun(runId, config) {
       });
     }
 
-    const runConfig = { ...config, recommendedBackend };
+    try {
+      const resolvedPython = await ensureTrainingPython((line) =>
+        emitEvent(run, { type: 'stage-log', stageId: 'prepare', line }),
+      );
+      trainingPython = resolvedPython.command;
+      emitEvent(run, {
+        type: 'stage-log',
+        stageId: 'prepare',
+        line: `Training interpreter: ${resolvedPython.executable} (${resolvedPython.architecture}, Python ${resolvedPython.version.join('.')}).`,
+      });
+    } catch (error) {
+      emitEvent(run, { type: 'stage-log', stageId: 'prepare', line: `ERROR: ${error.message}` });
+      emitEvent(run, { type: 'stage-end', stageId: 'prepare', status: 'failed', exitCode: null });
+      run.stageResults.prepare = 'failed';
+      emitEvent(run, { type: 'run-complete', stageResults: run.stageResults });
+      return;
+    }
+
+    const runConfig = { ...config, recommendedBackend, trainingPython };
 
     for (const stage of runConfig.stages) {
       const built = buildStageCommand(stage, runConfig);

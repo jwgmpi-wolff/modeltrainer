@@ -144,7 +144,6 @@ function Get-RepositoryRoot {
 
 Assert-Command -Name 'node' -InstallHint 'Install Node.js 20+ from https://nodejs.org/'
 Assert-Command -Name 'npm' -InstallHint 'Install Node.js 20+ from https://nodejs.org/'
-Assert-Command -Name 'python' -InstallHint 'Install Python 3.11 and ensure python.exe is on PATH.'
 
 $repoRoot = Get-RepositoryRoot
 Set-Location $repoRoot
@@ -187,5 +186,11 @@ Write-Host $startMenuShortcut
 Write-Host "Launch Local Model Lab by double-clicking either shortcut."
 
 if (-not $BuildOnly) {
-  Start-Process -FilePath $launcher.FullName
+  $appProcess = Start-Process -FilePath $launcher.FullName -WorkingDirectory $launcher.DirectoryName -PassThru
+  Start-Sleep -Seconds 3
+  if ($appProcess.HasExited) {
+    throw "Local Model Lab exited immediately with code $($appProcess.ExitCode). Run '$($launcher.FullName) --enable-logging' to inspect startup output."
+  }
+  $null = $shell.AppActivate($appProcess.Id)
+  Write-Host "Local Model Lab is running as process $($appProcess.Id)."
 }

@@ -6,29 +6,79 @@ from pathlib import Path
 
 def test_gpu():
     import torch
-    import torch_directml
 
-    if not torch_directml.is_available():
-        return False, "DirectML unavailable"
-    index = torch_directml.default_device()
-    device = torch_directml.device(index)
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        device_name = torch.cuda.get_device_name(0)
+        backend = "CUDA"
+    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+        device = torch.device("xpu")
+        device_name = torch.xpu.get_device_name(0)
+        backend = "Intel XPU"
+    else:
+        try:
+            import torch_directml
+
+            if not torch_directml.is_available():
+                return False, "DirectML unavailable"
+            index = torch_directml.default_device()
+            device = torch_directml.device(index)
+            device_name = torch_directml.device_name(index).replace("\x00", "")
+            backend = "DirectML"
+        except ImportError:
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                device = torch.device("mps")
+                device_name = "Apple Silicon GPU"
+                backend = "MPS"
+            else:
+                return False, "No CUDA, Intel XPU, DirectML, or MPS training device is available"
     base_weight = torch.randn((32, 32), device=device)
     lora_a = torch.nn.Parameter(torch.randn((32, 4), device=device) * 0.01)
     lora_b = torch.nn.Parameter(torch.zeros((4, 32), device=device))
-    optimizer = torch.optim.SGD([lora_a, lora_b], lr=1e-2)
+    parameters = (lora_a, lora_b)
+    optimizer_state = {
+        parameter: {
+            "exp_avg": torch.zeros_like(parameter),
+            "exp_avg_sq": torch.zeros_like(parameter),
+        }
+        for parameter in parameters
+    }
+    beta1, beta2 = (0.9, 0.999)
+    learning_rate = 1e-2
+    epsilon = 1e-8
     inputs = torch.randn((8, 32), device=device)
     targets = torch.randn((8, 32), device=device)
-    loss = ((inputs @ (base_weight + lora_a @ lora_b) - targets) ** 2).mean()
-    loss.backward()
-    optimizer.step()
+    for step in range(1, 11):
+        for parameter in parameters:
+            parameter.grad = None
+        loss = ((inputs @ (base_weight + lora_a @ lora_b) - targets) ** 2).mean()
+        loss.backward()
+        with torch.no_grad():
+            for parameter in parameters:
+                gradient = parameter.grad
+                state = optimizer_state[parameter]
+                state["exp_avg"].mul_(beta1).add_(gradient, alpha=1 - beta1)
+                state["exp_avg_sq"].mul_(beta2).addcmul_(
+                    gradient, gradient, value=1 - beta2
+                )
+                denominator = (
+                    state["exp_avg_sq"]
+                    .sqrt()
+                    .div_((1 - beta2**step) ** 0.5)
+                    .add_(epsilon)
+                )
+                parameter.addcdiv_(
+                    state["exp_avg"],
+                    denominator,
+                    value=-(learning_rate / (1 - beta1**step)),
+                )
     train_loss = float(loss.detach().cpu())
     if not train_loss > 0:
         raise RuntimeError(f"DirectML LoRA training produced invalid loss {train_loss}.")
-    device_name = torch_directml.device_name(index).replace("\x00", "")
-    return True, f"{device_name}; one-step LoRA train_loss={train_loss:.6f}"
+    return True, f"{device_name} via {backend}; ten-step AdamW LoRA train_loss={train_loss:.6f}"
 
 
-def test_npu():
+def test_qualcomm_npu():
     import numpy as np
     import onnx
     import onnxruntime as ort
@@ -86,6 +136,37 @@ def test_npu():
     return verified, f"QNNExecutionProvider ({npu_nodes} node on Hexagon NPU)"
 
 
+def test_intel_npu():
+    import numpy as np
+    import openvino as ov
+
+    core = ov.Core()
+    npu_device = next((device for device in core.available_devices if device.upper().startswith("NPU")), None)
+    if not npu_device:
+        return False, "OpenVINO Intel NPU device unavailable"
+
+    parameter = ov.opset13.parameter([1, 4], np.float32, name="x")
+    constant = ov.opset13.constant(np.ones((1, 4), dtype=np.float32))
+    model = ov.Model([ov.opset13.add(parameter, constant)], [parameter], "model-trainer-intel-npu-probe")
+    compiled = core.compile_model(model, npu_device)
+    output = compiled([np.ones((1, 4), dtype=np.float32)])[0]
+    verified = bool(np.allclose(output, np.full((1, 4), 2.0)))
+    return verified, f"OpenVINO {npu_device}"
+
+
+def test_npu():
+    failures = []
+    for test in (test_qualcomm_npu, test_intel_npu):
+        try:
+            verified, provider = test()
+            if verified:
+                return verified, provider
+            failures.append(provider)
+        except Exception as exc:
+            failures.append(str(exc))
+    return False, "; ".join(failures)
+
+
 def main():
     result = {
         "gpuVerified": False,
@@ -96,12 +177,14 @@ def main():
     }
     try:
         result["gpuVerified"], result["gpuDevice"] = test_gpu()
-        result["details"].append("A real one-step LoRA update completed through PyTorch DirectML.")
+        result["details"].append("Ten real AdamW LoRA updates completed on the selected GPU backend.")
     except Exception as exc:
         result["details"].append(f"GPU test failed: {exc}")
     try:
         result["npuVerified"], result["npuProvider"] = test_npu()
-        result["details"].append("ONNX graph executed through the Qualcomm QNN HTP provider.")
+        result["details"].append(
+            f"An inference graph executed through {result['npuProvider']} without CPU fallback."
+        )
     except Exception as exc:
         result["details"].append(f"NPU test failed: {exc}")
     result["details"] = " ".join(result["details"])

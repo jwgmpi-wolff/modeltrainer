@@ -1,9 +1,7 @@
 import { execFile } from 'node:child_process';
-import fs from 'node:fs';
 import os from 'node:os';
-import path from 'node:path';
 import { promisify } from 'node:util';
-import { workspaceRoot } from './runtimePaths.js';
+import { findCompatibleTrainingPython } from './pythonRuntime.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -34,8 +32,27 @@ async function detectGpu() {
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);
-    return names;
+    return [...new Set(names)];
   } catch (error) {
+    return [];
+  }
+}
+
+async function detectNpus() {
+  if (process.platform !== 'win32') return [];
+  try {
+    const { stdout } = await execFileAsync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match '\\bNPU\\b|Neural Processing|AI Boost|Hexagon' } | Select-Object -ExpandProperty Name",
+      ],
+      { timeout: 15000, windowsHide: true },
+    );
+    return [...new Set(stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
+  } catch {
     return [];
   }
 }
@@ -56,20 +73,16 @@ function classifyGpuVendor(name) {
 // adapters (even ones we can't name-classify, like this machine's "Trigger 6
 // External Graphics" entries) still count as real DirectML-capable hardware.
 function isVirtualGpu(name) {
-  return /microsoft basic render|remote desktop|virtual display|indirect display/i.test(name);
+  return /external graphics|microsoft basic (?:display|render)|remote desktop|remote display|virtual display|indirect display/i.test(name);
 }
 
 export async function runSystemCheck() {
-  const localPython =
-    process.platform === 'win32'
-      ? path.join(workspaceRoot, '.venv-training', 'Scripts', 'python.exe')
-      : path.join(workspaceRoot, '.venv-training', 'bin', 'python');
-  const pythonCommand = fs.existsSync(localPython) ? localPython : process.platform === 'win32' ? 'python' : 'python3';
-  const [python, ollama, wsl, gpuNames] = await Promise.all([
-    tryCommand(pythonCommand, ['--version']),
+  const [pythonRuntime, ollama, wsl, gpuNames, npuNames] = await Promise.all([
+    findCompatibleTrainingPython(),
     tryCommand('ollama', ['--version']),
     tryCommand('wsl', ['--status']),
     detectGpu(),
+    detectNpus(),
   ]);
 
   const cpuModel = os.cpus()?.[0]?.model || 'Unknown CPU';
@@ -115,8 +128,15 @@ export async function runSystemCheck() {
       hasNvidiaGpu,
       recommendedBackend,
     },
+    npu: {
+      names: npuNames,
+      available: npuNames.length > 0,
+      role: 'Inference and model validation only; LoRA weight training runs on GPU or CPU.',
+    },
     tools: {
-      python: python.found ? `${python.output} (${pythonCommand})` : null,
+      python: pythonRuntime.compatible
+        ? `Python ${pythonRuntime.version.join('.')} (${pythonRuntime.architecture}) at ${pythonRuntime.executable}`
+        : null,
       ollama: ollama.found ? ollama.output : null,
       wsl: wsl.found ? wsl.output : null,
     },
