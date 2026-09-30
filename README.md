@@ -23,6 +23,12 @@ The project standard is explicit: **do not build mockups for pipeline behavior**
 - Separately discovers and activates a completed adapter or checkpoint adapter
   for post-training agent/inference use; this selection is independent of the
   base model being fine-tuned.
+- Recursively crawls a selected local folder for model artifacts and can move
+  every discovered model into one destination without overwriting existing
+  files. Each model receives its own subfolder under that destination.
+  Multi-file Hugging Face, adapter, ONNX, TensorFlow SavedModel, OpenVINO, and
+  compiled Core ML bundles remain intact; standalone GGUF, ONNX, ORT, Core ML,
+  PyTorch, SafeTensors, and TensorFlow Lite files are supported.
 - Runs a real accelerator self-test: a DirectML LoRA update on the Windows GPU
   plus a profiled ONNX graph on the Qualcomm QNN/Hexagon NPU.
 - Evaluates whether adapter artifacts exist.
@@ -139,6 +145,12 @@ http://127.0.0.1:3000
 9. After training, use **Post-training Agent / Inference model** to activate the
    adapter an agent should use. The **Base model** field remains a training-only
    choice.
+10. To gather models spread across the machine, enter a source and destination
+    under **Find and consolidate local models**, scan to preview every match,
+    then choose **Move all found models**. Symbolic links are skipped, the
+    destination subtree is excluded from the crawl, and every model remains
+    distinct in its own subfolder. Duplicate names receive numbered suffixes
+    instead of replacing existing files.
 
 ## Dataset format
 

@@ -11,9 +11,11 @@ import { samplesRoot, scriptsRoot, workspaceRoot } from './runtimePaths.js';
 import { runAcceleratorSelfTest } from './acceleratorService.js';
 import {
   activateAgentModel,
+  crawlForModels,
   discoverAgentModels,
   getActiveAgentModel,
   listCheckpoints,
+  moveDiscoveredModels,
   validateResumeCheckpoint,
 } from './modelArtifacts.js';
 
@@ -73,6 +75,28 @@ app.post('/api/agent-models/activate', (req, res) => {
     res.json({ ok: true, activeModel: activateAgentModel(req.body?.adapterPath) });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post('/api/model-files/scan', (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      ...crawlForModels(req.body?.sourceRoot, req.body?.destinationRoot),
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post('/api/model-files/move', (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      ...moveDiscoveredModels(req.body?.sourceRoot, req.body?.destinationRoot),
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message, moved: error.moved || [] });
   }
 });
 

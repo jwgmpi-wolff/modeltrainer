@@ -6,7 +6,9 @@ import {
   Circle,
   Cpu,
   FileCheck2,
+  FolderSearch,
   MemoryStick,
+  Move,
   Play,
   RefreshCw,
   Square,
@@ -224,6 +226,11 @@ export default function App() {
   const [activeAgentModel, setActiveAgentModel] = useState(null);
   const [refreshingAgentModels, setRefreshingAgentModels] = useState(false);
   const [selfTesting, setSelfTesting] = useState(false);
+  const [modelSearchRoot, setModelSearchRoot] = useState('');
+  const [modelDestinationRoot, setModelDestinationRoot] = useState('');
+  const [modelFileScan, setModelFileScan] = useState(null);
+  const [scanningModelFiles, setScanningModelFiles] = useState(false);
+  const [movingModelFiles, setMovingModelFiles] = useState(false);
   const datasetFileInput = useRef(null);
   const videoManifestInput = useRef(null);
   const videoClipsInput = useRef(null);
@@ -329,6 +336,77 @@ export default function App() {
       );
     } catch (error) {
       appendLog(`ERROR: Could not activate agent model. (${error.message})`);
+    }
+  };
+
+  const scanModelFiles = async () => {
+    if (!modelSearchRoot.trim()) {
+      appendLog('ERROR: Enter a source folder to search for model files.');
+      return;
+    }
+    setScanningModelFiles(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/model-files/scan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceRoot: modelSearchRoot.trim(),
+          destinationRoot: modelDestinationRoot.trim(),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      setModelFileScan(result);
+      appendLog(
+        `MODEL CRAWL: Found ${result.models.length} model(s) under ${result.sourceRoot}. ` +
+          `Skipped ${result.skippedSymlinks} symbolic link(s).`,
+      );
+    } catch (error) {
+      setModelFileScan(null);
+      appendLog(`ERROR: Could not crawl for models. (${error.message})`);
+    } finally {
+      setScanningModelFiles(false);
+    }
+  };
+
+  const moveModelFiles = async () => {
+    if (!modelSearchRoot.trim() || !modelDestinationRoot.trim()) {
+      appendLog('ERROR: Enter both source and destination folders before moving models.');
+      return;
+    }
+    const modelCount = modelFileScan?.models?.length || 0;
+    if (
+      !window.confirm(
+        `Move ${modelCount || 'all discovered'} model(s) from "${modelSearchRoot.trim()}" ` +
+          `to "${modelDestinationRoot.trim()}"? Existing files will not be overwritten.`,
+      )
+    ) {
+      return;
+    }
+
+    setMovingModelFiles(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/model-files/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceRoot: modelSearchRoot.trim(),
+          destinationRoot: modelDestinationRoot.trim(),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      setModelFileScan({ ...result, models: [] });
+      appendLog(
+        `MODEL MOVE: Moved ${result.moved.length} model(s) to ${result.destinationRoot}. ` +
+          'Each model remains in its own subfolder; name collisions use numbered suffixes.',
+      );
+      refreshAgentModels();
+    } catch (error) {
+      appendLog(`ERROR: Could not finish moving all models. (${error.message})`);
+      await scanModelFiles();
+    } finally {
+      setMovingModelFiles(false);
     }
   };
 
@@ -1120,6 +1198,93 @@ export default function App() {
             <Button className="self-end" onClick={activateAgentModel} disabled={!selectedAgentModel}>
               Activate for inference
             </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FolderSearch className="h-5 w-5 text-cyan-400" />
+              Find and consolidate local models
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <Label className="mb-2">Folder to crawl</Label>
+                <Input
+                  value={modelSearchRoot}
+                  onChange={(event) => {
+                    setModelSearchRoot(event.target.value);
+                    setModelFileScan(null);
+                  }}
+                  placeholder="C:\path\to\search"
+                  aria-label="Folder to crawl for models"
+                />
+              </div>
+              <div>
+                <Label className="mb-2">Single destination folder</Label>
+                <Input
+                  value={modelDestinationRoot}
+                  onChange={(event) => {
+                    setModelDestinationRoot(event.target.value);
+                    setModelFileScan(null);
+                  }}
+                  placeholder="C:\path\to\model-library"
+                  aria-label="Model destination folder"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-slate-400">
+              Finds Hugging Face, adapter, ONNX, TensorFlow, OpenVINO, Core ML, GGUF, SafeTensors,
+              PyTorch, and TensorFlow Lite models. Every model stays distinct in its own destination
+              subfolder, model bundles stay together, symbolic links are skipped, and existing items
+              are never overwritten.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                variant="secondary"
+                onClick={scanModelFiles}
+                disabled={!modelSearchRoot.trim() || scanningModelFiles || movingModelFiles}
+              >
+                <FolderSearch className={`mr-2 h-4 w-4 ${scanningModelFiles ? 'animate-pulse' : ''}`} />
+                {scanningModelFiles ? 'Crawling folders...' : 'Scan for models'}
+              </Button>
+              <Button
+                onClick={moveModelFiles}
+                disabled={
+                  !modelSearchRoot.trim() ||
+                  !modelDestinationRoot.trim() ||
+                  !modelFileScan?.models?.length ||
+                  scanningModelFiles ||
+                  movingModelFiles
+                }
+              >
+                <Move className="mr-2 h-4 w-4" />
+                {movingModelFiles ? 'Moving models...' : 'Move all found models'}
+              </Button>
+            </div>
+            {modelFileScan && (
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+                <p className="text-sm text-slate-200">
+                  Found {modelFileScan.models?.length ?? modelFileScan.foundCount ?? 0} model(s).
+                  {modelFileScan.skippedSymlinks > 0
+                    ? ` Skipped ${modelFileScan.skippedSymlinks} symbolic link(s).`
+                    : ''}
+                </p>
+                {modelFileScan.models?.length > 0 && (
+                  <ul className="mt-3 max-h-56 space-y-2 overflow-auto text-xs text-slate-400">
+                    {modelFileScan.models.map((candidate) => (
+                      <li key={candidate.sourcePath}>
+                        <span className="text-cyan-300">{candidate.format}</span>
+                        {' - '}
+                        {candidate.sourcePath}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 
