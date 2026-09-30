@@ -200,11 +200,18 @@ http://127.0.0.1:3000
 8. Watch the determinate progress meter and **Real command output**. Progress
    comes from structured trainer callbacks rather than elapsed-time estimates.
 9. After training, use **Post-training Agent / Inference model** to activate the
-   adapter an agent should use. The **Base model** field remains a training-only
-   choice.
+   adapter an agent should use. Choose any discovery starting folder with the
+   native **Browse** button; the app recursively finds every complete adapter
+   and checkpoint beneath it. Selecting a model displays available training
+   provenance: modality, base model, dataset file and SHA-256, backend/device,
+   optimizer progress, loss, epochs, LoRA settings, batch/accumulation,
+   learning rate, context or video settings, save time, and metadata warnings.
+   Older third-party models remain discoverable when only part of this
+   metadata exists. The **Base model** field remains a training-only choice.
 10. To gather models spread across the machine, enter a source and destination
-    under **Find and consolidate local models**, scan to preview every match,
-    then choose **Move all found models**. Symbolic links are skipped, the
+    under **Find and consolidate local models** (or select them with the native
+    **Browse** buttons), scan to preview every match, then choose **Move all
+    found models**. Symbolic links are skipped, the
     destination subtree is excluded from the crawl, and every model remains
     distinct in its own subfolder. Duplicate names receive numbered suffixes
     instead of replacing existing files.

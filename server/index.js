@@ -62,19 +62,41 @@ app.get('/api/checkpoints', (req, res) => {
   }
 });
 
-app.get('/api/agent-models', (_req, res) => {
+app.get('/api/agent-models', (req, res) => {
   try {
-    res.json({ ok: true, models: discoverAgentModels(), activeModel: getActiveAgentModel() });
+    const discovery = discoverAgentModels(String(req.query.root || ''));
+    res.json({ ok: true, ...discovery, activeModel: getActiveAgentModel() });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(400).json({ ok: false, error: error.message });
   }
 });
 
 app.post('/api/agent-models/activate', (req, res) => {
   try {
-    res.json({ ok: true, activeModel: activateAgentModel(req.body?.adapterPath) });
+    res.json({
+      ok: true,
+      activeModel: activateAgentModel(req.body?.adapterPath, req.body?.searchRoot),
+    });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+let selectDirectory = null;
+
+app.post('/api/select-folder', async (req, res) => {
+  if (!selectDirectory) {
+    res.status(501).json({
+      ok: false,
+      error: 'Native folder selection is available in the Local Model Lab desktop app.',
+    });
+    return;
+  }
+  try {
+    const selectedPath = await selectDirectory(String(req.body?.initialPath || ''));
+    res.json({ ok: true, path: selectedPath });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -354,7 +376,12 @@ app.use((error, _req, res, _next) => {
   }
 });
 
-export function startServer({ port = process.env.PORT || 8787, host = '127.0.0.1' } = {}) {
+export function startServer({
+  port = process.env.PORT || 8787,
+  host = '127.0.0.1',
+  chooseDirectory = null,
+} = {}) {
+  selectDirectory = chooseDirectory;
   return new Promise((resolve, reject) => {
     const server = app.listen(port, host, () => {
       const address = server.address();

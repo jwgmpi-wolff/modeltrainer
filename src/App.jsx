@@ -224,6 +224,7 @@ export default function App() {
   const [agentModels, setAgentModels] = useState([]);
   const [selectedAgentModel, setSelectedAgentModel] = useState('');
   const [activeAgentModel, setActiveAgentModel] = useState(null);
+  const [agentModelRoot, setAgentModelRoot] = useState('');
   const [refreshingAgentModels, setRefreshingAgentModels] = useState(false);
   const [selfTesting, setSelfTesting] = useState(false);
   const [modelSearchRoot, setModelSearchRoot] = useState('');
@@ -237,6 +238,10 @@ export default function App() {
   const eventSourceRef = useRef(null);
 
   const selectedCount = useMemo(() => stages.filter((s) => s.selected).length, [stages]);
+  const selectedAgentCandidate = useMemo(
+    () => agentModels.find((candidate) => candidate.adapterPath === selectedAgentModel) || null,
+    [agentModels, selectedAgentModel],
+  );
   const effectiveModel = datasetKind === 'video'
     ? (videoModel === 'custom' ? customVideoModel.trim() : videoModel)
     : (model === 'custom' ? customModel.trim() : model);
@@ -298,13 +303,15 @@ export default function App() {
     }
   };
 
-  const refreshAgentModels = async () => {
+  const refreshAgentModels = async (root = agentModelRoot) => {
     setRefreshingAgentModels(true);
     try {
-      const response = await fetch(`${API_BASE}/api/agent-models`);
+      const query = root.trim() ? `?root=${encodeURIComponent(root.trim())}` : '';
+      const response = await fetch(`${API_BASE}/api/agent-models${query}`);
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
       setAgentModels(result.models);
+      setAgentModelRoot(result.searchRoot);
       setActiveAgentModel(result.activeModel);
       setSelectedAgentModel((current) =>
         result.models.some((candidate) => candidate.adapterPath === current)
@@ -327,7 +334,7 @@ export default function App() {
       const response = await fetch(`${API_BASE}/api/agent-models/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ adapterPath: selectedAgentModel }),
+        body: JSON.stringify({ adapterPath: selectedAgentModel, searchRoot: agentModelRoot }),
       });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
@@ -337,6 +344,21 @@ export default function App() {
       );
     } catch (error) {
       appendLog(`ERROR: Could not activate agent model. (${error.message})`);
+    }
+  };
+
+  const chooseFolder = async (initialPath, onSelected) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/select-folder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initialPath }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      if (result.path) onSelected(result.path);
+    } catch (error) {
+      appendLog(`ERROR: Could not select a folder. (${error.message})`);
     }
   };
 
@@ -358,6 +380,8 @@ export default function App() {
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
       setModelFileScan(result);
+      setAgentModelRoot(result.sourceRoot);
+      await refreshAgentModels(result.sourceRoot);
       appendLog(
         `MODEL CRAWL: Found ${result.models.length} model(s) under ${result.sourceRoot}. ` +
           `Skipped ${result.skippedSymlinks} symbolic link(s).`,
@@ -402,7 +426,8 @@ export default function App() {
         `MODEL MOVE: Moved ${result.moved.length} model(s) to ${result.destinationRoot}. ` +
           'Each model remains in its own subfolder; name collisions use numbered suffixes.',
       );
-      refreshAgentModels();
+      setAgentModelRoot(result.destinationRoot);
+      refreshAgentModels(result.destinationRoot);
     } catch (error) {
       appendLog(`ERROR: Could not finish moving all models. (${error.message})`);
       await scanModelFiles();
@@ -1166,8 +1191,43 @@ export default function App() {
               Post-training Agent / Inference model
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
+          <CardContent className="space-y-4">
             <div>
+              <Label className="mb-2">Discovery starting folder</Label>
+              <div className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
+                <Input
+                  value={agentModelRoot}
+                  onChange={(event) => setAgentModelRoot(event.target.value)}
+                  placeholder="Choose the parent folder containing trained models"
+                  aria-label="Agent model discovery starting folder"
+                />
+                <Button
+                  variant="secondary"
+                  onClick={() =>
+                    chooseFolder(agentModelRoot, (selectedPath) => {
+                      setAgentModelRoot(selectedPath);
+                      refreshAgentModels(selectedPath);
+                    })
+                  }
+                >
+                  <FolderSearch className="mr-2 h-4 w-4" />
+                  Browse
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => refreshAgentModels()}
+                  disabled={!agentModelRoot.trim() || refreshingAgentModels}
+                >
+                  <RefreshCw className={`mr-2 h-4 w-4 ${refreshingAgentModels ? 'animate-spin' : ''}`} />
+                  Discover recursively
+                </Button>
+              </div>
+              <p className="mt-2 text-xs text-slate-400">
+                Select any parent folder. All complete Hugging Face adapters and training checkpoints beneath it remain distinct.
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+              <div>
               <Label className="mb-2">Trained adapter used by an agent after training</Label>
               <Select
                 value={selectedAgentModel}
@@ -1192,19 +1252,61 @@ export default function App() {
                   ? `${activeAgentModel.baseModel} + ${activeAgentModel.adapterPath}`
                   : 'No post-training model selected'}
               </p>
+              </div>
+              <Button className="self-end" onClick={activateAgentModel} disabled={!selectedAgentModel}>
+                Activate for inference
+              </Button>
             </div>
-            <Button
-              variant="secondary"
-              className="self-end"
-              onClick={refreshAgentModels}
-              disabled={refreshingAgentModels}
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${refreshingAgentModels ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
-            <Button className="self-end" onClick={activateAgentModel} disabled={!selectedAgentModel}>
-              Activate for inference
-            </Button>
+            {selectedAgentCandidate && (
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <Badge>{selectedAgentCandidate.trainingMetadata.modality || 'Unknown modality'}</Badge>
+                  <Badge variant="outline">{selectedAgentCandidate.artifactType}</Badge>
+                  {selectedAgentCandidate.trainingMetadata.trainingKind && (
+                    <Badge variant="outline">{selectedAgentCandidate.trainingMetadata.trainingKind}</Badge>
+                  )}
+                </div>
+                <div className="grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    ['Base model', selectedAgentCandidate.baseModel],
+                    ['Dataset', selectedAgentCandidate.trainingMetadata.datasetFileName],
+                    ['Dataset SHA-256', selectedAgentCandidate.trainingMetadata.datasetSha256],
+                    ['Backend', selectedAgentCandidate.trainingMetadata.backend],
+                    ['Device', selectedAgentCandidate.trainingMetadata.deviceName],
+                    ['Progress', selectedAgentCandidate.trainingMetadata.globalStep != null
+                      ? `${selectedAgentCandidate.trainingMetadata.globalStep}/${selectedAgentCandidate.trainingMetadata.maxSteps ?? '?'} steps`
+                      : null],
+                    ['Epochs', selectedAgentCandidate.trainingMetadata.epochs],
+                    ['Last loss', selectedAgentCandidate.trainingMetadata.lastLoss],
+                    ['LoRA rank / alpha', selectedAgentCandidate.trainingMetadata.loraRank != null
+                      ? `${selectedAgentCandidate.trainingMetadata.loraRank} / ${selectedAgentCandidate.trainingMetadata.loraAlpha ?? '?'}`
+                      : null],
+                    ['Batch / accumulation', selectedAgentCandidate.trainingMetadata.batchSize != null
+                      ? `${selectedAgentCandidate.trainingMetadata.batchSize} / ${selectedAgentCandidate.trainingMetadata.gradientAccumulationSteps ?? '?'}`
+                      : null],
+                    ['Learning rate', selectedAgentCandidate.trainingMetadata.learningRate],
+                    ['Context length', selectedAgentCandidate.trainingMetadata.maxLength],
+                    ['Video frames / FPS', selectedAgentCandidate.trainingMetadata.maxFrames != null
+                      ? `${selectedAgentCandidate.trainingMetadata.maxFrames} / ${selectedAgentCandidate.trainingMetadata.fps ?? '?'}`
+                      : null],
+                    ['Saved', new Date(selectedAgentCandidate.savedAt).toLocaleString()],
+                  ].filter(([, value]) => value !== null && value !== undefined && value !== '').map(([label, value]) => (
+                    <div key={label} className="rounded-lg border border-slate-800 px-3 py-2">
+                      <div className="text-slate-500">{label}</div>
+                      <div className="mt-1 break-all text-slate-200">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+                {selectedAgentCandidate.trainingMetadata.targetModules?.length > 0 && (
+                  <p className="mt-3 text-xs text-slate-400">
+                    Target modules: {selectedAgentCandidate.trainingMetadata.targetModules.join(', ')}
+                  </p>
+                )}
+                {selectedAgentCandidate.trainingMetadata.warnings.map((warning) => (
+                  <p key={warning} className="mt-2 text-xs text-amber-300">{warning}</p>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -1219,27 +1321,53 @@ export default function App() {
             <div className="grid gap-3 md:grid-cols-2">
               <div>
                 <Label className="mb-2">Folder to crawl</Label>
-                <Input
-                  value={modelSearchRoot}
-                  onChange={(event) => {
-                    setModelSearchRoot(event.target.value);
-                    setModelFileScan(null);
-                  }}
-                  placeholder="C:\path\to\search"
-                  aria-label="Folder to crawl for models"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    value={modelSearchRoot}
+                    onChange={(event) => {
+                      setModelSearchRoot(event.target.value);
+                      setModelFileScan(null);
+                    }}
+                    placeholder="C:\path\to\search"
+                    aria-label="Folder to crawl for models"
+                  />
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      chooseFolder(modelSearchRoot, (selectedPath) => {
+                        setModelSearchRoot(selectedPath);
+                        setModelFileScan(null);
+                      })
+                    }
+                  >
+                    Browse
+                  </Button>
+                </div>
               </div>
               <div>
                 <Label className="mb-2">Single destination folder</Label>
-                <Input
-                  value={modelDestinationRoot}
-                  onChange={(event) => {
-                    setModelDestinationRoot(event.target.value);
-                    setModelFileScan(null);
-                  }}
-                  placeholder="C:\path\to\model-library"
-                  aria-label="Model destination folder"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    value={modelDestinationRoot}
+                    onChange={(event) => {
+                      setModelDestinationRoot(event.target.value);
+                      setModelFileScan(null);
+                    }}
+                    placeholder="C:\path\to\model-library"
+                    aria-label="Model destination folder"
+                  />
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      chooseFolder(modelDestinationRoot, (selectedPath) => {
+                        setModelDestinationRoot(selectedPath);
+                        setModelFileScan(null);
+                      })
+                    }
+                  >
+                    Browse
+                  </Button>
+                </div>
               </div>
             </div>
             <p className="text-xs text-slate-400">

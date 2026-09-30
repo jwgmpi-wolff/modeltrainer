@@ -76,10 +76,13 @@ internal static class Installer
                     MessageBoxIcon.Information);
             }
 
-            Process.Start(new ProcessStartInfo(executablePath) {
-                WorkingDirectory = installDirectory,
-                UseShellExecute = true
-            });
+            if (!silent)
+            {
+                Process.Start(new ProcessStartInfo(executablePath) {
+                    WorkingDirectory = installDirectory,
+                    UseShellExecute = true
+                });
+            }
             return 0;
         }
         catch (Exception error)

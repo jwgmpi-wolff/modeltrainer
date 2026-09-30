@@ -356,7 +356,23 @@ def main():
     # Recorded so 'Merge adapter' (and later stages) can tell this apart from
     # a video/vision-language adapter without guessing from the base model
     # name.
-    manifest_out = {"modality": "text", "base_model": args.model}
+    manifest_out = {
+        "modality": "text",
+        "base_model": args.model,
+        "dataset_file": dataset_path.name,
+        "dataset_sha256": run_config["dataset_sha256"],
+        "backend": backend,
+        "device_name": detected["device_name"],
+        "training_kind": "QLoRA (4-bit quantized)" if quantized else "LoRA (fp16/fp32, not quantized)",
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "gradient_accumulation_steps": run_config["gradient_accumulation_steps"],
+        "learning_rate": args.learning_rate,
+        "lora_rank": args.rank,
+        "max_length": args.max_length,
+        "max_steps": args.max_steps,
+        "sample_size": args.sample_size,
+    }
     (output_dir / "training_manifest.json").write_text(json.dumps(manifest_out, indent=2), encoding="utf-8")
 
     print(

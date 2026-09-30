@@ -21,7 +21,17 @@ function configureRuntimePaths() {
 async function createWindow() {
   configureRuntimePaths();
   const { startServer } = await import('../server/index.js');
-  apiServer = await startServer({ port: 0 });
+  apiServer = await startServer({
+    port: 0,
+    chooseDirectory: async (initialPath) => {
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: 'Select a model folder',
+        defaultPath: initialPath || app.getPath('documents'),
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      return result.canceled ? null : result.filePaths[0];
+    },
+  });
   const address = apiServer.address();
   const apiBase = `http://127.0.0.1:${address.port}`;
 

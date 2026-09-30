@@ -305,6 +305,29 @@ export function listCheckpoints(outputName) {
   return [...checkpoints, ...discovered];
 }
 
+function readOptionalJson(filePath, warnings) {
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    warnings.push(`Could not read ${filePath}: ${error.message}`);
+    return null;
+  }
+}
+
+function firstExistingMetadata(directory, fileName, warnings) {
+  const directories = /^checkpoint-\d+$/.test(path.basename(directory))
+    ? [directory, path.dirname(directory)]
+    : [directory];
+  for (const candidateDirectory of directories) {
+    const filePath = path.join(candidateDirectory, fileName);
+    if (fs.existsSync(filePath)) {
+      return { path: filePath, value: readOptionalJson(filePath, warnings) };
+    }
+  }
+  return { path: null, value: null };
+}
+
 function readCandidate(directory, artifactType, trainingStep = null) {
   const adapterConfigPath = path.join(directory, 'adapter_config.json');
   if (!fs.existsSync(adapterConfigPath)) return null;
@@ -314,6 +337,16 @@ function readCandidate(directory, artifactType, trainingStep = null) {
   if (!hasWeights) return null;
 
   const adapterConfig = JSON.parse(fs.readFileSync(adapterConfigPath, 'utf8'));
+  const metadataWarnings = [];
+  const run = firstExistingMetadata(directory, 'training_run.json', metadataWarnings);
+  const manifest = firstExistingMetadata(directory, 'training_manifest.json', metadataWarnings);
+  const trainerState = firstExistingMetadata(directory, 'trainer_state.json', metadataWarnings);
+  const logHistory = Array.isArray(trainerState.value?.log_history)
+    ? trainerState.value.log_history
+    : [];
+  const latestMetrics = [...logHistory]
+    .reverse()
+    .find((entry) => entry.train_loss != null || entry.loss != null) || {};
   const stats = fs.statSync(adapterConfigPath);
   const outputName =
     artifactType === 'Completed adapter'
@@ -327,32 +360,70 @@ function readCandidate(directory, artifactType, trainingStep = null) {
     artifactType,
     trainingStep,
     savedAt: stats.mtime.toISOString(),
+    trainingMetadata: {
+      modality: manifest.value?.modality || run.value?.modality || null,
+      modelClass: manifest.value?.model_class || null,
+      backend: manifest.value?.backend || null,
+      deviceName: manifest.value?.device_name || null,
+      trainingKind: manifest.value?.training_kind || null,
+      datasetFileName: run.value?.dataset_file || manifest.value?.dataset_file || null,
+      datasetSha256: run.value?.dataset_sha256 || manifest.value?.dataset_sha256 || null,
+      epochs: run.value?.epochs ?? manifest.value?.epochs ?? null,
+      batchSize: run.value?.batch_size ?? manifest.value?.batch_size ?? null,
+      gradientAccumulationSteps:
+        run.value?.gradient_accumulation_steps ?? manifest.value?.gradient_accumulation_steps ?? null,
+      learningRate: run.value?.learning_rate ?? manifest.value?.learning_rate ?? null,
+      loraRank: run.value?.lora_rank ?? adapterConfig.r ?? null,
+      loraAlpha: adapterConfig.lora_alpha ?? null,
+      maxLength: run.value?.max_length ?? manifest.value?.max_text_length ?? null,
+      maxFrames: manifest.value?.max_frames ?? null,
+      fps: manifest.value?.fps ?? null,
+      sampleSize: run.value?.sample_size ?? manifest.value?.sample_size ?? null,
+      maxSteps: trainerState.value?.max_steps ?? run.value?.max_steps ?? manifest.value?.max_steps ?? null,
+      globalStep: trainerState.value?.global_step ?? trainingStep ?? null,
+      lastLoss: latestMetrics.train_loss ?? latestMetrics.loss ?? trainerState.value?.best_metric ?? null,
+      targetModules: Array.isArray(adapterConfig.target_modules)
+        ? adapterConfig.target_modules
+        : adapterConfig.target_modules && typeof adapterConfig.target_modules === 'object'
+          ? Object.keys(adapterConfig.target_modules)
+          : adapterConfig.target_modules
+            ? [String(adapterConfig.target_modules)]
+            : null,
+      taskType: adapterConfig.task_type || null,
+      sourceFiles: [run.path, manifest.path, trainerState.path, adapterConfigPath].filter(Boolean),
+      warnings: metadataWarnings,
+    },
   };
 }
 
-export function discoverAgentModels() {
-  if (!fs.existsSync(outputRoot)) return [];
+export function discoverAgentModels(searchRoot = outputRoot) {
+  const resolvedRoot = path.resolve(searchRoot || outputRoot);
+  if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) {
+    throw new Error(`Model discovery folder does not exist or is not a directory: ${resolvedRoot}`);
+  }
   const candidates = [];
 
-  for (const outputEntry of fs.readdirSync(outputRoot, { withFileTypes: true })) {
-    if (!outputEntry.isDirectory()) continue;
-    const modelDirectory = path.join(outputRoot, outputEntry.name);
-    const completed = readCandidate(modelDirectory, 'Completed adapter');
-    if (completed) candidates.push(completed);
+  const visit = (directory) => {
+    const checkpointMatch = /^checkpoint-(\d+)$/.exec(path.basename(directory));
+    const candidate = readCandidate(
+      directory,
+      checkpointMatch ? 'Training checkpoint' : 'Completed adapter',
+      checkpointMatch ? Number(checkpointMatch[1]) : null,
+    );
+    if (candidate) candidates.push(candidate);
 
-    for (const entry of fs.readdirSync(modelDirectory, { withFileTypes: true })) {
-      const match = entry.isDirectory() && /^checkpoint-(\d+)$/.exec(entry.name);
-      if (!match) continue;
-      const checkpoint = readCandidate(
-        path.join(modelDirectory, entry.name),
-        'Training checkpoint',
-        Number(match[1]),
-      );
-      if (checkpoint) candidates.push(checkpoint);
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        visit(path.join(directory, entry.name));
+      }
     }
-  }
+  };
 
-  return candidates.sort((left, right) => new Date(right.savedAt) - new Date(left.savedAt));
+  visit(resolvedRoot);
+  return {
+    searchRoot: resolvedRoot,
+    models: candidates.sort((left, right) => new Date(right.savedAt) - new Date(left.savedAt)),
+  };
 }
 
 export function getActiveAgentModel() {
@@ -360,17 +431,19 @@ export function getActiveAgentModel() {
   return JSON.parse(fs.readFileSync(activeModelPath, 'utf8'));
 }
 
-export function activateAgentModel(adapterPath) {
+export function activateAgentModel(adapterPath, searchRoot = outputRoot) {
   if (!adapterPath || !fs.existsSync(adapterPath)) {
     throw new Error('The selected adapter does not exist.');
   }
-  const resolvedRoot = fs.existsSync(outputRoot) ? fs.realpathSync(outputRoot) : outputRoot;
+  const resolvedRoot = fs.realpathSync(path.resolve(searchRoot || outputRoot));
   const resolvedAdapter = fs.realpathSync(adapterPath);
-  if (!isInside(resolvedRoot, resolvedAdapter)) {
-    throw new Error('The selected agent model must be inside the Model Trainer output directory.');
+  if (!isSameOrInside(resolvedRoot, resolvedAdapter)) {
+    throw new Error('The selected agent model must be inside the selected discovery folder.');
   }
 
-  const candidate = discoverAgentModels().find((item) => item.adapterPath === resolvedAdapter);
+  const candidate = discoverAgentModels(resolvedRoot).models.find(
+    (item) => fs.realpathSync(item.adapterPath) === resolvedAdapter,
+  );
   if (!candidate) {
     throw new Error('The selected adapter is incomplete or is not a discovered model artifact.');
   }
