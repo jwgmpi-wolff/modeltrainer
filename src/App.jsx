@@ -318,6 +318,13 @@ export default function App() {
           ? current
           : result.activeModel?.adapterPath || result.models[0]?.adapterPath || '',
       );
+      if (result.skippedDirectories?.length) {
+        appendLog(
+          `MODEL DISCOVERY: Found ${result.models.length} adapter(s); skipped ` +
+            `${result.skippedDirectories.length} protected folder(s) that Windows did not permit access to.`,
+        );
+      }
+      result.warnings?.forEach((warning) => appendLog(`MODEL DISCOVERY WARNING: ${warning}`));
     } catch (error) {
       appendLog(`ERROR: Could not discover post-training models. (${error.message})`);
     } finally {
@@ -384,7 +391,8 @@ export default function App() {
       await refreshAgentModels(result.sourceRoot);
       appendLog(
         `MODEL CRAWL: Found ${result.models.length} model(s) under ${result.sourceRoot}. ` +
-          `Skipped ${result.skippedSymlinks} symbolic link(s).`,
+          `Skipped ${result.skippedSymlinks} symbolic link(s) and ` +
+          `${result.skippedDirectories.length} protected folder(s).`,
       );
     } catch (error) {
       setModelFileScan(null);
@@ -1405,6 +1413,9 @@ export default function App() {
                   Found {modelFileScan.models?.length ?? modelFileScan.foundCount ?? 0} model(s).
                   {modelFileScan.skippedSymlinks > 0
                     ? ` Skipped ${modelFileScan.skippedSymlinks} symbolic link(s).`
+                    : ''}
+                  {modelFileScan.skippedDirectories?.length > 0
+                    ? ` Skipped ${modelFileScan.skippedDirectories.length} protected folder(s).`
                     : ''}
                 </p>
                 {modelFileScan.models?.length > 0 && (

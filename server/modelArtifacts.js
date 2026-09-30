@@ -36,6 +36,10 @@ function isSameOrInside(parent, candidate) {
   return path.resolve(parent) === path.resolve(candidate) || isInside(path.resolve(parent), path.resolve(candidate));
 }
 
+function isInaccessibleDirectoryError(error) {
+  return error?.code === 'EACCES' || error?.code === 'EPERM';
+}
+
 function getModelDirectoryFormat(directory, entries) {
   const fileNames = new Set(entries.filter((entry) => entry.isFile()).map((entry) => entry.name.toLowerCase()));
   const hasFileMatching = (pattern) => [...fileNames].some((name) => pattern.test(name));
@@ -101,6 +105,7 @@ export function crawlForModels(sourceRoot, destinationRoot = '') {
 
   const models = [];
   let skippedSymlinks = 0;
+  const skippedDirectories = [];
 
   const visit = (directory, isRoot = false) => {
     if (
@@ -110,7 +115,16 @@ export function crawlForModels(sourceRoot, destinationRoot = '') {
       return;
     }
 
-    const entries = fs.readdirSync(directory, { withFileTypes: true });
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      if (!isRoot && isInaccessibleDirectoryError(error)) {
+        skippedDirectories.push({ path: directory, reason: error.code });
+        return;
+      }
+      throw error;
+    }
     const directoryFormat = !isRoot ? getModelDirectoryFormat(directory, entries) : null;
     if (directoryFormat) {
       models.push({
@@ -150,6 +164,7 @@ export function crawlForModels(sourceRoot, destinationRoot = '') {
     destinationRoot: resolvedDestination,
     models: models.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath)),
     skippedSymlinks,
+    skippedDirectories,
   };
 }
 
@@ -250,6 +265,7 @@ export function moveDiscoveredModels(sourceRoot, destinationRoot) {
     foundCount: scan.models.length,
     moved,
     skippedSymlinks: scan.skippedSymlinks,
+    skippedDirectories: scan.skippedDirectories,
   };
 }
 
@@ -398,31 +414,56 @@ function readCandidate(directory, artifactType, trainingStep = null) {
 
 export function discoverAgentModels(searchRoot = outputRoot) {
   const resolvedRoot = path.resolve(searchRoot || outputRoot);
+  if (!fs.existsSync(resolvedRoot) && resolvedRoot === outputRoot) {
+    return { searchRoot: resolvedRoot, models: [], skippedDirectories: [], warnings: [] };
+  }
   if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) {
     throw new Error(`Model discovery folder does not exist or is not a directory: ${resolvedRoot}`);
   }
   const candidates = [];
+  const skippedDirectories = [];
+  const warnings = [];
 
-  const visit = (directory) => {
-    const checkpointMatch = /^checkpoint-(\d+)$/.exec(path.basename(directory));
-    const candidate = readCandidate(
-      directory,
-      checkpointMatch ? 'Training checkpoint' : 'Completed adapter',
-      checkpointMatch ? Number(checkpointMatch[1]) : null,
-    );
-    if (candidate) candidates.push(candidate);
+  const visit = (directory, isRoot = false) => {
+    try {
+      const checkpointMatch = /^checkpoint-(\d+)$/.exec(path.basename(directory));
+      const candidate = readCandidate(
+        directory,
+        checkpointMatch ? 'Training checkpoint' : 'Completed adapter',
+        checkpointMatch ? Number(checkpointMatch[1]) : null,
+      );
+      if (candidate) candidates.push(candidate);
+    } catch (error) {
+      if (isInaccessibleDirectoryError(error)) {
+        skippedDirectories.push({ path: directory, reason: error.code });
+        return;
+      }
+      warnings.push(`Skipped invalid model metadata in ${directory}: ${error.message}`);
+    }
 
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      if (isInaccessibleDirectoryError(error)) {
+        skippedDirectories.push({ path: directory, reason: error.code });
+        return;
+      }
+      throw error;
+    }
+    for (const entry of entries) {
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
         visit(path.join(directory, entry.name));
       }
     }
   };
 
-  visit(resolvedRoot);
+  visit(resolvedRoot, true);
   return {
     searchRoot: resolvedRoot,
     models: candidates.sort((left, right) => new Date(right.savedAt) - new Date(left.savedAt)),
+    skippedDirectories,
+    warnings,
   };
 }
 

@@ -229,7 +229,9 @@ http://127.0.0.1:3000
    optimizer progress, loss, epochs, LoRA settings, batch/accumulation,
    learning rate, context or video settings, save time, and metadata warnings.
    Older third-party models remain discoverable when only part of this
-   metadata exists. The **Base model** field remains a training-only choice.
+   metadata exists. Protected Windows folders are counted and skipped rather
+   than aborting the rest of a recursive scan. The **Base model** field remains
+   a training-only choice.
 10. To gather models spread across the machine, enter a source and destination
     under **Find and consolidate local models** (or select them with the native
     **Browse** buttons), scan to preview every match, then choose **Move all

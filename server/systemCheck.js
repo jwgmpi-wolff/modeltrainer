@@ -136,7 +136,9 @@ export async function runSystemCheck() {
     tools: {
       python: pythonRuntime.compatible
         ? `Python ${pythonRuntime.version.join('.')} (${pythonRuntime.architecture}) at ${pythonRuntime.executable}`
-        : null,
+        : process.platform === 'win32'
+          ? 'Private x64 Python 3.11.9 will be installed during Prepare environment'
+          : null,
       ollama: ollama.found ? ollama.output : null,
       wsl: wsl.found ? wsl.output : null,
     },
