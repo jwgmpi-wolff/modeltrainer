@@ -4,9 +4,9 @@ Local Model Lab is a real local fine-tuning pipeline manager for Hugging Face ca
 
 ## Download the latest Windows installer
 
-[![Download for Intel and AMD Windows](https://img.shields.io/badge/Download-x64%20Windows%20installer-0078D4?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/latest/download/Local%20Model%20Lab-Setup-1.0.1-x64.exe)
+[![Download for Intel and AMD Windows](https://img.shields.io/badge/Download-x64%20Windows%20installer-0078D4?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/latest/download/Local.Model.Lab-Setup-1.0.1-x64.exe)
 
-[![Download for Windows ARM](https://img.shields.io/badge/Download-ARM64%20Windows%20installer-5C2D91?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/latest/download/Local%20Model%20Lab-Setup-1.0.1-arm64.exe)
+[![Download for Windows ARM](https://img.shields.io/badge/Download-ARM64%20Windows%20installer-5C2D91?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/latest/download/Local.Model.Lab-Setup-1.0.1-arm64.exe)
 
 - **Intel/AMD computer:** download the x64 installer.
 - **Snapdragon/Windows ARM computer:** download the ARM64 installer.
