@@ -2,6 +2,28 @@
 
 Local Model Lab is a real local fine-tuning pipeline manager for Hugging Face causal language models. It has a React/Vite frontend and an Express backend that runs real Python training, merge, GGUF conversion, quantization, Ollama registration, and smoke-test commands.
 
+## Download the latest Windows installer
+
+[![Download for Intel and AMD Windows](https://img.shields.io/badge/Download-x64%20Windows%20installer-0078D4?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/latest/download/Local%20Model%20Lab-Setup-1.0.1-x64.exe)
+
+[![Download for Windows ARM](https://img.shields.io/badge/Download-ARM64%20Windows%20installer-5C2D91?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/latest/download/Local%20Model%20Lab-Setup-1.0.1-arm64.exe)
+
+- **Intel/AMD computer:** download the x64 installer.
+- **Snapdragon/Windows ARM computer:** download the ARM64 installer.
+- Run the downloaded `.exe`. It installs the complete application, registers
+  Local Model Lab in Windows **Installed apps**, installs the application icon
+  and uninstaller, creates Desktop and Start Menu shortcuts, and launches the
+  app.
+- This repository is private, so GitHub may require you to sign in before the
+  installer downloads.
+
+Current v1.0.1 checksums:
+
+```text
+x64    6B8491727922AEFFEE12AF1B11AB7E57AE373FDD5052E5AA9A13BE4C21B6F0BF
+ARM64  604E4E82FC691F2441CED73A8FA812BC3FB415948A48E5FE9771C862110E4943
+```
+
 The project standard is explicit: **do not build mockups for pipeline behavior**. Every run button must execute real local work, stream real process output, and fail honestly when a dependency, model, GPU backend, or generated artifact is missing.
 
 ## What this app does
