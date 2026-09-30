@@ -125,7 +125,7 @@ export function crawlForModels(sourceRoot, destinationRoot = '') {
       }
       throw error;
     }
-    const directoryFormat = !isRoot ? getModelDirectoryFormat(directory, entries) : null;
+    const directoryFormat = getModelDirectoryFormat(directory, entries);
     if (directoryFormat) {
       models.push({
         sourcePath: directory,
@@ -211,6 +211,14 @@ export function moveDiscoveredModels(sourceRoot, destinationRoot) {
 
   const scan = crawlForModels(sourceRoot, destinationRoot);
   const resolvedDestination = scan.destinationRoot;
+  if (
+    scan.models.some((model) => model.kind === 'directory' && model.sourcePath === scan.sourceRoot) &&
+    isInside(scan.sourceRoot, resolvedDestination)
+  ) {
+    throw new Error(
+      'The selected source folder is itself a model. Choose a destination outside that model folder.',
+    );
+  }
   fs.mkdirSync(resolvedDestination, { recursive: true });
 
   const reservedPaths = new Set();
