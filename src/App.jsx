@@ -22,6 +22,7 @@ const API_BASE =
   window.location.protocol === 'file:' && /^http:\/\/127\.0\.0\.1:\d+$/.test(apiBaseQuery || '')
     ? apiBaseQuery
     : 'http://127.0.0.1:8787';
+const MODEL_LIBRARY_STORAGE_KEY = 'local-model-lab.model-library';
 
 const initialStages = [
   { id: 'validate', name: 'Validate training data', status: 'ready', selected: true },
@@ -228,8 +229,12 @@ export default function App() {
   const [refreshingAgentModels, setRefreshingAgentModels] = useState(false);
   const [selfTesting, setSelfTesting] = useState(false);
   const [modelSearchRoot, setModelSearchRoot] = useState('');
-  const [modelDestinationRoot, setModelDestinationRoot] = useState('');
+  const [modelDestinationRoot, setModelDestinationRoot] = useState(
+    () => window.localStorage.getItem(MODEL_LIBRARY_STORAGE_KEY) || '',
+  );
   const [modelFileScan, setModelFileScan] = useState(null);
+  const [centralModelInventory, setCentralModelInventory] = useState([]);
+  const [inventoryingCentralModels, setInventoryingCentralModels] = useState(false);
   const [scanningModelFiles, setScanningModelFiles] = useState(false);
   const [movingModelFiles, setMovingModelFiles] = useState(false);
   const datasetFileInput = useRef(null);
@@ -241,6 +246,14 @@ export default function App() {
   const selectedAgentCandidate = useMemo(
     () => agentModels.find((candidate) => candidate.adapterPath === selectedAgentModel) || null,
     [agentModels, selectedAgentModel],
+  );
+  const trainableCentralModels = useMemo(
+    () => centralModelInventory.filter((candidate) => candidate.format === 'Hugging Face model'),
+    [centralModelInventory],
+  );
+  const nonTrainableCentralModels = useMemo(
+    () => centralModelInventory.filter((candidate) => candidate.format !== 'Hugging Face model'),
+    [centralModelInventory],
   );
   const effectiveModel = datasetKind === 'video'
     ? (videoModel === 'custom' ? customVideoModel.trim() : videoModel)
@@ -402,6 +415,35 @@ export default function App() {
     }
   };
 
+  const refreshCentralModelInventory = async (root = modelDestinationRoot) => {
+    const selectedRoot = root.trim();
+    if (!selectedRoot) {
+      setCentralModelInventory([]);
+      return;
+    }
+    setInventoryingCentralModels(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/model-files/scan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceRoot: selectedRoot }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      setCentralModelInventory(result.models);
+      appendLog(
+        `MODEL LIBRARY: Inventoried ${result.models.length} model(s); ` +
+          `${result.models.filter((candidate) => candidate.format === 'Hugging Face model').length} ` +
+          'can be selected as a training base.',
+      );
+    } catch (error) {
+      setCentralModelInventory([]);
+      appendLog(`ERROR: Could not inventory the central model library. (${error.message})`);
+    } finally {
+      setInventoryingCentralModels(false);
+    }
+  };
+
   const moveModelFiles = async () => {
     if (!modelSearchRoot.trim() || !modelDestinationRoot.trim()) {
       appendLog('ERROR: Enter both source and destination folders before moving models.');
@@ -435,7 +477,10 @@ export default function App() {
           'Each model remains in its own subfolder; name collisions use numbered suffixes.',
       );
       setAgentModelRoot(result.destinationRoot);
-      refreshAgentModels(result.destinationRoot);
+      await Promise.all([
+        refreshAgentModels(result.destinationRoot),
+        refreshCentralModelInventory(result.destinationRoot),
+      ]);
     } catch (error) {
       appendLog(`ERROR: Could not finish moving all models. (${error.message})`);
       await scanModelFiles();
@@ -466,10 +511,20 @@ export default function App() {
     runSystemCheck();
     loadSamples();
     refreshAgentModels();
+    if (modelDestinationRoot) refreshCentralModelInventory(modelDestinationRoot);
     return () => {
       eventSourceRef.current?.close();
     };
   }, []);
+
+  useEffect(() => {
+    if (modelDestinationRoot) {
+      window.localStorage.setItem(MODEL_LIBRARY_STORAGE_KEY, modelDestinationRoot);
+    } else {
+      window.localStorage.removeItem(MODEL_LIBRARY_STORAGE_KEY);
+      setCentralModelInventory([]);
+    }
+  }, [modelDestinationRoot]);
 
   useEffect(() => {
     setSelectedCheckpoint('');
@@ -832,6 +887,24 @@ export default function App() {
                         {option.label}
                       </SelectItem>
                     ))}
+                    {trainableCentralModels.length > 0 && (
+                      <optgroup label="Central model library">
+                        {trainableCentralModels.map((candidate) => (
+                          <SelectItem key={candidate.sourcePath} value={candidate.sourcePath}>
+                            {candidate.name} - local {candidate.format}
+                          </SelectItem>
+                        ))}
+                      </optgroup>
+                    )}
+                    {nonTrainableCentralModels.length > 0 && (
+                      <optgroup label="Central library (not usable as a training base)">
+                        {nonTrainableCentralModels.map((candidate) => (
+                          <SelectItem key={candidate.sourcePath} value={candidate.sourcePath} disabled>
+                            {candidate.name} - {candidate.format}
+                          </SelectItem>
+                        ))}
+                      </optgroup>
+                    )}
                   </Select>
                   {videoModel === 'custom' && (
                     <Input
@@ -851,6 +924,24 @@ export default function App() {
                         {option.label}
                       </SelectItem>
                     ))}
+                    {trainableCentralModels.length > 0 && (
+                      <optgroup label="Central model library">
+                        {trainableCentralModels.map((candidate) => (
+                          <SelectItem key={candidate.sourcePath} value={candidate.sourcePath}>
+                            {candidate.name} - local {candidate.format}
+                          </SelectItem>
+                        ))}
+                      </optgroup>
+                    )}
+                    {nonTrainableCentralModels.length > 0 && (
+                      <optgroup label="Central library (not usable as a training base)">
+                        {nonTrainableCentralModels.map((candidate) => (
+                          <SelectItem key={candidate.sourcePath} value={candidate.sourcePath} disabled>
+                            {candidate.name} - {candidate.format}
+                          </SelectItem>
+                        ))}
+                      </optgroup>
+                    )}
                   </Select>
                   {model === 'custom' && (
                     <Input
@@ -1370,6 +1461,7 @@ export default function App() {
                       chooseFolder(modelDestinationRoot, (selectedPath) => {
                         setModelDestinationRoot(selectedPath);
                         setModelFileScan(null);
+                        refreshCentralModelInventory(selectedPath);
                       })
                     }
                   >
@@ -1406,7 +1498,23 @@ export default function App() {
                 <Move className="mr-2 h-4 w-4" />
                 {movingModelFiles ? 'Moving models...' : 'Move all found models'}
               </Button>
+              <Button
+                variant="secondary"
+                onClick={() => refreshCentralModelInventory()}
+                disabled={!modelDestinationRoot.trim() || inventoryingCentralModels || movingModelFiles}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${inventoryingCentralModels ? 'animate-spin' : ''}`} />
+                {inventoryingCentralModels ? 'Inventorying...' : 'Inventory destination'}
+              </Button>
             </div>
+            {modelDestinationRoot && (
+              <p className="text-xs text-slate-400">
+                Central library inventory: {centralModelInventory.length} model(s), including{' '}
+                {trainableCentralModels.length} Hugging Face base model(s) available in the training
+                model selectors. Other artifact types remain visible there but are disabled because
+                they cannot be loaded as a Transformers training base.
+              </p>
+            )}
             {modelFileScan && (
               <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
                 <p className="text-sm text-slate-200">

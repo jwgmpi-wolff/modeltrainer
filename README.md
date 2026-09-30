@@ -235,7 +235,12 @@ http://127.0.0.1:3000
 10. To gather models spread across the machine, enter a source and destination
     under **Find and consolidate local models** (or select them with the native
     **Browse** buttons), scan to preview every match, then choose **Move all
-    found models**. Symbolic links are skipped, the
+    found models**. The destination is remembered between launches. Use
+    **Inventory destination** to refresh its contents; complete Hugging Face
+    model directories then appear as local choices in both training model
+    selectors. Other discovered formats remain visible but disabled because
+    adapters, GGUF, ONNX, and standalone weights cannot serve directly as a
+    Transformers training base. Symbolic links are skipped, the
     destination subtree is excluded from the crawl, and every model remains
     distinct in its own subfolder. Duplicate names receive numbered suffixes
     instead of replacing existing files.
