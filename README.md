@@ -20,8 +20,8 @@ Local Model Lab is a real local fine-tuning pipeline manager for Hugging Face ca
 Current v1.0.1 checksums:
 
 ```text
-x64    6B8491727922AEFFEE12AF1B11AB7E57AE373FDD5052E5AA9A13BE4C21B6F0BF
-ARM64  604E4E82FC691F2441CED73A8FA812BC3FB415948A48E5FE9771C862110E4943
+x64    82654F867DF7CC49757E6FFBD24528E41F3A2D37588513657ADCB7B564453807
+ARM64  B4EED5B3B465A71A18D106EF932046387F8A280A761BCEBF19FC59E4ADA79EB1
 ```
 
 The project standard is explicit: **do not build mockups for pipeline behavior**. Every run button must execute real local work, stream real process output, and fail honestly when a dependency, model, GPU backend, or generated artifact is missing.
