@@ -1,7 +1,7 @@
 {
   "name": "modeltrainer",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Local fine-tuning and model management desktop application",
   "author": "Jerry Wolff",
   "type": "module",
@@ -18,7 +18,8 @@
     "preview": "vite preview --host 0.0.0.0",
     "deploy:local": "powershell -ExecutionPolicy Bypass -File scripts/deploy-to-local-machine.ps1",
     "deploy:static": "npm run build",
-    "check": "npm run build"
+    "check": "npm run build",
+    "test": "node --test tests/workflows.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -2,11 +2,28 @@
 
 Local Model Lab is a real local fine-tuning pipeline manager for Hugging Face causal language models. It has a React/Vite frontend and an Express backend that runs real Python training, merge, GGUF conversion, quantization, Ollama registration, and smoke-test commands.
 
-## Download the latest Windows installer
+## Download installers
 
-[![Download for Intel and AMD Windows](https://img.shields.io/badge/Download-x64%20Windows%20installer-0078D4?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/latest/download/Local.Model.Lab-Setup-1.0.1-x64.exe)
+[View all published releases and installer assets](https://github.com/jwgmpi-wolff/modeltrainer/releases/latest).
 
-[![Download for Windows ARM](https://img.shields.io/badge/Download-ARM64%20Windows%20installer-5C2D91?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/latest/download/Local.Model.Lab-Setup-1.0.1-arm64.exe)
+| Platform | Download | Availability |
+| --- | --- | --- |
+| Windows x64 (Intel / AMD) | [Windows x64 installer (.exe)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.0.1/Local.Model.Lab-Setup-1.0.1-x64.exe) | Published: v1.0.1 |
+| Windows ARM64 (Snapdragon) | [Windows ARM64 installer (.exe)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.0.1/Local.Model.Lab-Setup-1.0.1-arm64.exe) | Published: v1.0.1 |
+| macOS (Apple Silicon / Intel) | No published installer | Native installer packaging and validation are not currently provided. |
+| Linux (x64 / ARM64) | No published installer | No AppImage, `.deb`, or `.rpm` is currently published. |
+
+**Release scope:** the downloads above are the published v1.0.1 builds. New
+source changes, including concurrent chat, dataset queues, document crawling and
+exports, are not included in those installers until a new release is built and
+published. To run the updated source on Windows, follow [Install](#install) and
+[Launch the clickable Windows app](#launch-the-clickable-windows-app).
+
+### Windows installers
+
+[![Download for Intel and AMD Windows](https://img.shields.io/badge/Download-x64%20Windows%20installer-0078D4?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.0.1/Local.Model.Lab-Setup-1.0.1-x64.exe)
+
+[![Download for Windows ARM](https://img.shields.io/badge/Download-ARM64%20Windows%20installer-5C2D91?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.0.1/Local.Model.Lab-Setup-1.0.1-arm64.exe)
 
 - **Intel/AMD computer:** download the x64 installer.
 - **Snapdragon/Windows ARM computer:** download the ARM64 installer.
@@ -60,6 +77,131 @@ The project standard is explicit: **do not build mockups for pipeline behavior**
 - Registers the model in real local Ollama.
 - Smoke-tests the registered Ollama model with a real prompt.
 
+## Concurrent training, inference, and dataset queues
+
+The **Model inference and conversations** panel runs independently of the training
+pipeline. Start local Ollama, click **Refresh installed models**, select an installed
+chat-capable model, and send a prompt. You can start or continue fine-tuning while
+inference is working, and vice versa. Tokens stream into the panel, with a spinner,
+elapsed time, and explicit loading/generating/completed/error states. **Stop
+inference** cancels the request without stopping training.
+
+Both workloads share the machine's RAM/VRAM. Concurrent operation is allowed, not a
+guarantee that two large models fit; use smaller models or stop one workload if the
+runtime reports insufficient memory. Chat uses Ollama's installed model, never
+partially written live training weights. To chat with a completed text fine-tune,
+finish merge, GGUF conversion, quantization, and Ollama registration, then refresh
+the inference model list. Activating a Hugging Face adapter in the discovery panel
+does **not** automatically load it into Ollama. Video adapters still need a
+vision-capable runtime; this panel supports text chat only.
+
+Each follow-up sends the full saved user/assistant thread to the same model.
+Choose **New conversation** to change models, or retrieve a previous thread from
+**Saved conversation**. The latest 30 conversations and 50 unique recent prompts
+are stored unencrypted in this browser/desktop profile's local storage and survive
+restarts. **Retrieve a recent prompt** copies a saved prompt into the editor without
+submitting it. Avoid sensitive prompts on shared devices; **Clear local history**
+removes these records. Storage errors are displayed rather than silently losing
+history. Cancelled/failed output is marked partial and is not used as conversation
+context; the original prompt remains available for retry.
+
+**Export PDF** and **Export Word (.docx)** download the completed conversation with
+a title, model name, prompt/response headings, paragraphs and line breaks. PDF adds
+page numbers and embeds a system font when available (Arial on Windows). Glyph
+coverage, especially emoji or non-Latin scripts, depends on that font. Exports are
+generated locally; no hosted conversion service is used.
+
+### Queue multiple local datasets
+
+1. Choose **Text** or **Video** and a compatible base model.
+2. For text, select the dataset connector **before** adding files:
+   - **Chat JSONL:** each record has a `messages` array of `role`/`content` strings.
+   - **Prompt/completion JSONL:** each record has string `prompt` and `completion`
+     fields; these are normalized into user/assistant chat messages.
+   Both require non-empty user and assistant content. The selected model's
+   tokenizer/chat template is used by the existing text trainer.
+3. **Browse files** accepts multiple text JSONL files. Samples append to the queue
+   too. For video, upload each manifest and its matching clips, then repeat for
+   the next dataset. The video connector resolves clips against each manifest's
+   upload directory so identical clip filenames in different datasets do not
+   collide; the vision-language trainer uses its model processor.
+4. Review **Fine-tuning dataset queue**, reorder with **Up/Down**, or **Remove**
+   entries. Text and video have separate queues and cannot be mixed in one run.
+5. **Check dataset queue** validates the combined input (including the existing
+   video/ffprobe checks). **Run now** independently normalizes and validates the
+   queue before launching training. Files are combined in queue order into one
+   run, not independent jobs or separate adapters. Turn off **Quick training** to
+   use the full queue rather than the existing small smoke-test sample.
+
+Prepared datasets are immutable, content-addressed JSONL files under
+`uploads/prepared`; the same normalized inputs produce the same path/hash, which
+preserves checkpoint dataset compatibility. Uploads use unique filenames rather
+than overwriting data already queued or in use. Queues are session-only; add the
+datasets again after reopening the app. Up to 100 datasets can be queued per run.
+
+### Internet-hosted data, documents and page screen scrapes
+
+In text mode, **Internet-hosted data** accepts a public HTTPS site, page or document
+URL. Confirm that you own or have permission to collect/use the content for
+training, set the maximum number of pages/documents to attempt (1-100), and choose
+**Crawl site**. The crawler follows same-origin links, reads `robots.txt` using the
+`ModelTrainerBot` user agent, and honors applicable allow/disallow rules and crawl
+delays. It does not cross into other sites or private/local network addresses,
+send browser cookies, log into sites, or bypass access restrictions.
+
+Supported readable content:
+
+- HTML page text (static screen scraping, omitting scripts, navigation and explicitly
+  hidden elements).
+- Text-based PDF documents.
+- Word `.docx` documents, including text in tables, headers/footers and notes.
+- Plain-text documents such as `.txt`, `.md`, `.csv`, `.json` and `.jsonl`.
+
+This is **not** screenshot OCR or a JavaScript browser renderer. Image-only PDFs,
+screenshots, protected files, legacy binary `.doc` files, login-only content and
+pages that need JavaScript may not yield readable text. Unavailable, blocked,
+unsupported and empty sources are reported; partial collection is never presented
+as complete site coverage. PDF/Word extraction preserves text, not the original
+visual layout. Downloads are limited to 8 MB each; Word XML to 32 MB expanded;
+each source contributes at most 100,000 characters and truncation is flagged.
+The attempt limit and a 30-minute timeout bound each crawl. A crawl can be stopped
+without interrupting inference or training; **Reconnect / refresh crawl** checks
+a job after a browser interruption, while the same backend is still running.
+
+After collection, inspect the generated JSONL path and skipped-source report, then
+click **Add collected website dataset to queue**. It can be mixed with local text
+datasets in the same fine-tune. Collected text is split into 1,500-character
+source-question/answer excerpts, each with source URL, title, format, collection
+date, full extracted-text hash, chunk index/count and truncation flag. Choose a
+suitable training context length for the language/model; the trainer still applies
+its token limit. These synthetic instruction pairs are not curated QA:
+review for accuracy, rights, secrets, personal information, prompt injection and
+training quality before running. Website text is untrusted data, not instructions
+for the application. Crawled datasets stay local under `uploads/website-datasets`;
+no hosted scraping or document-conversion service is used.
+
+PDF extraction uses the maintained PDF.js-based parser. The backend pins a newer
+compatible `@napi-rs/canvas` through its dependency override because the parser's
+older default canvas version has no Windows ARM64 binary. Install backend
+dependencies on the target architecture when running from source.
+
+### Validate these workflows
+
+```powershell
+npm run install:all
+npm test
+npm run build
+```
+
+The Node test suite covers connector normalization, queue ordering, malformed and
+mixed-modality inputs, video path resolution, conversation context, token streams,
+runtime failures, PDF/DOCX output, upload isolation, and inference API access while
+a pipeline is marked active. It also covers website scope/permission boundaries,
+robots rules, readable PDF/Word extraction, crawl provenance and partial coverage.
+Ollama responses in these automated tests are isolated
+fixtures, not simulated production results; live GPU concurrency remains dependent
+on the local models and hardware.
+
 ## Repository layout
 
 ```text
@@ -80,7 +222,7 @@ modeltrainer/
 
 Install these before recreating the app:
 
-1. **Node.js 20+** and npm.
+1. **Node.js 20.19+ (20.x), or 22.3+**, and npm. A current LTS release is recommended.
 2. **Git** for source-based installation.
 3. **Ollama** if you want the final register/smoke-test stages.
 4. **CMake and a C++ compiler** if you want to build `llama.cpp` locally for GGUF conversion and quantization.

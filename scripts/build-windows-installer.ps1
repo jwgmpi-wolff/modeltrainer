@@ -5,11 +5,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$version = (Get-Content -LiteralPath (Join-Path $repoRoot 'package.json') -Raw | ConvertFrom-Json).version
+if ($version -notmatch '^\d+\.\d+\.\d+$') {
+  throw "The package version must be a numeric major.minor.patch release."
+}
 $releaseRoot = Join-Path $repoRoot 'release'
 $appDirectoryName = if ($Architecture -eq 'arm64') { 'win-arm64-unpacked' } else { 'win-unpacked' }
 $appDirectory = Join-Path $releaseRoot $appDirectoryName
 $payloadPath = Join-Path $releaseRoot "Local-Model-Lab-$Architecture.zip"
-$installerPath = Join-Path $releaseRoot "Local Model Lab-Setup-1.0.1-$Architecture.exe"
+$installerPath = Join-Path $releaseRoot "Local Model Lab-Setup-$version-$Architecture.exe"
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 
 if (-not (Test-Path $csc)) {
@@ -17,6 +21,18 @@ if (-not (Test-Path $csc)) {
 }
 
 Set-Location $repoRoot
+foreach ($source in @('Installer.cs', 'Uninstaller.cs')) {
+  $sourceText = Get-Content -LiteralPath (Join-Path $repoRoot "installer\$source") -Raw
+  if ($sourceText -notmatch [regex]::Escape("AssemblyVersion(`"$version.0`")") -or
+      $sourceText -notmatch [regex]::Escape("AssemblyFileVersion(`"$version.0`")")) {
+    throw "Installer metadata in $source does not match package version $version."
+  }
+}
+$installerSource = Get-Content -LiteralPath (Join-Path $repoRoot 'installer\Installer.cs') -Raw
+if ($installerSource -notmatch [regex]::Escape("const string Version = `"$version`";")) {
+  throw "The installer registration version does not match package version $version."
+}
+
 npm run build
 if ($LASTEXITCODE -ne 0) {
   throw "Frontend build failed with exit code $LASTEXITCODE."

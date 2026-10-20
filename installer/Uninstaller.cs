@@ -8,8 +8,8 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("Uninstall Local Model Lab")]
 [assembly: AssemblyProduct("Local Model Lab")]
 [assembly: AssemblyCompany("Jerry Wolff")]
-[assembly: AssemblyVersion("1.0.1.0")]
-[assembly: AssemblyFileVersion("1.0.1.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 internal static class Uninstaller
 {

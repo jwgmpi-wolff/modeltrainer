@@ -9,6 +9,11 @@ import { runSystemCheck } from './systemCheck.js';
 import { startPipelineRun, runs } from './pipeline.js';
 import { samplesRoot, scriptsRoot, workspaceRoot } from './runtimePaths.js';
 import { runAcceleratorSelfTest } from './acceleratorService.js';
+import { prepareDatasetQueue } from './datasetQueue.js';
+import { listInferenceModels, streamInference, validateConversation } from './inference.js';
+import { exportConversation, validateExport } from './conversationExport.js';
+import { findCompatibleTrainingPython } from './pythonRuntime.js';
+import { crawlWebsite, validateCrawlRequest } from './websiteDataset.js';
 import {
   activateAgentModel,
   crawlForModels,
@@ -26,9 +31,104 @@ fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
+
+app.get('/api/inference/models', async (_req, res) => {
+  try {
+    res.json({ ok: true, models: await listInferenceModels() });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: `Local Ollama is unavailable. Start Ollama and install a chat model. ${error.message}` });
+  }
+});
+
+app.post('/api/inference/chat', async (req, res) => {
+  let conversation;
+  try {
+    conversation = validateConversation(req.body);
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+    return;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15 * 60 * 1000);
+  res.on('close', () => controller.abort());
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' });
+  res.flushHeaders();
+  try {
+    await streamInference(conversation, controller.signal, (event) => res.write(`${JSON.stringify(event)}\n`));
+  } catch (error) {
+    if (!res.destroyed) res.write(`${JSON.stringify({ type: 'error', error: `Inference failed: ${error.message}` })}\n`);
+  } finally {
+    clearTimeout(timeout);
+    res.end();
+  }
+});
+
+app.post('/api/datasets/prepare', async (req, res) => {
+  try {
+    res.json({ ok: true, ...(await prepareDatasetQueue(req.body.datasets, req.body.kind)) });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post('/api/inference/export', async (req, res) => {
+  try {
+    const conversation = validateExport(req.body);
+    const buffer = await exportConversation(conversation);
+    res.setHeader('Content-Type', conversation.format === 'pdf'
+      ? 'application/pdf'
+      : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="conversation.${conversation.format}"`);
+    res.send(buffer);
+  } catch (error) {
+    res.status(400).json({ ok: false, error: `Could not export conversation: ${error.message}` });
+  }
+});
 
 const upload = multer({ dest: UPLOADS_DIR });
+const crawls = new Map();
+
+app.post('/api/datasets/crawl', (req, res) => {
+  try {
+    const config = validateCrawlRequest(req.body);
+    if ([...crawls.values()].some((job) => job.status === 'running')) {
+      res.status(409).json({ ok: false, error: 'A site crawl is already running. Stop it or wait for completion.' });
+      return;
+    }
+    const id = crypto.randomUUID();
+    const controller = new AbortController();
+    const job = { id, status: 'running', attempted: 0, collected: 0, failed: 0, pending: 1, controller };
+    crawls.set(id, job);
+    const timeout = setTimeout(() => controller.abort(new Error('Crawl exceeded the 30-minute limit.')), 30 * 60 * 1000);
+    timeout.unref();
+    crawlWebsite(config, controller.signal, (progress) => Object.assign(job, progress))
+      .then((result) => Object.assign(job, { status: 'complete', result }))
+      .catch((error) => Object.assign(job, { status: 'failed', error: error.message }))
+      .finally(() => {
+        clearTimeout(timeout);
+        const retention = setTimeout(() => crawls.delete(id), 60 * 60 * 1000);
+        retention.unref();
+      });
+    res.status(202).json({ ok: true, id });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/datasets/crawl/:id', (req, res) => {
+  const job = crawls.get(req.params.id);
+  if (!job) { res.status(404).json({ ok: false, error: 'Crawl not found. It may have expired or the service restarted.' }); return; }
+  const { controller, ...status } = job;
+  res.json({ ok: true, ...status });
+});
+
+app.post('/api/datasets/crawl/:id/stop', (req, res) => {
+  const job = crawls.get(req.params.id);
+  if (!job) { res.status(404).json({ ok: false, error: 'Crawl not found.' }); return; }
+  job.controller.abort(new Error('Crawl stopped by the user. No dataset was queued.'));
+  res.json({ ok: true });
+});
 
 // Real health check — proves the backend is actually running, not simulated.
 app.get('/api/health', (_req, res) => {
@@ -152,17 +252,9 @@ app.post('/api/upload-dataset', upload.single('file'), (req, res) => {
     return;
   }
 
-  const finalPath = path.join(UPLOADS_DIR, req.file.originalname);
+  const finalPath = path.join(UPLOADS_DIR, `${crypto.randomUUID()}-${path.basename(req.file.originalname)}`);
 
   try {
-    // If a file with this name already exists (e.g. re-uploading the same
-    // dataset), remove it first. On Windows, fs.renameSync can throw a real
-    // EPERM error when the destination already exists and is momentarily
-    // locked (for example by antivirus scanning it), even though the rename
-    // is otherwise valid.
-    if (fs.existsSync(finalPath)) {
-      fs.unlinkSync(finalPath);
-    }
     fs.renameSync(req.file.path, finalPath);
   } catch (error) {
     // Real fallback for cross-device or lock-related failures: copy the
@@ -257,30 +349,46 @@ app.post(
 // plain text/chat JSONL validator.
 app.post('/api/validate-dataset', async (req, res) => {
   const { datasetPath, kind, videosDir } = req.body;
+  if (kind && !['text', 'video'].includes(kind)) {
+    res.status(400).json({ ok: false, error: 'Unsupported dataset kind.' });
+    return;
+  }
   if (!datasetPath || !fs.existsSync(datasetPath)) {
     res.status(400).json({ ok: false, error: `File not found: ${datasetPath}` });
     return;
   }
 
   const { spawn } = await import('node:child_process');
-  const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
+  const runtime = await findCompatibleTrainingPython();
+  if (!runtime.compatible) {
+    res.status(503).json({ ok: false, error: 'No compatible Python was found. Prepare the training environment first or configure MODEL_TRAINER_PYTHON.' });
+    return;
+  }
+  const pythonBin = runtime.command;
   const scriptArgs =
     kind === 'video'
-      ? [path.join(scriptsRoot, 'validate_video_dataset.py'), datasetPath, '--videos-dir', videosDir]
+      ? [path.join(scriptsRoot, 'validate_video_dataset.py'), datasetPath, '--videos-dir', videosDir || path.dirname(datasetPath)]
       : [path.join(scriptsRoot, 'validate_dataset.py'), datasetPath];
   const child = spawn(pythonBin, scriptArgs, {
     windowsHide: true,
   });
 
   let stdout = '';
+  let stderr = '';
   child.stdout.on('data', (chunk) => {
     stdout += chunk.toString('utf8');
   });
-  child.on('close', () => {
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+  child.on('error', (error) => {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: `Could not start the dataset validator: ${error.message}` });
+  });
+  child.on('close', (code) => {
+    if (res.headersSent) return;
     try {
-      res.json(JSON.parse(stdout));
+      const result = JSON.parse(stdout);
+      res.json({ ...result, ok: code === 0 && result.ok === true });
     } catch {
-      res.status(500).json({ ok: false, error: 'Validator did not return valid JSON.', raw: stdout });
+      res.status(500).json({ ok: false, error: `Validator failed to return JSON (exit ${code}). ${stderr.slice(-1000)}` });
     }
   });
 });
@@ -291,6 +399,16 @@ app.post('/api/validate-dataset', async (req, res) => {
 app.post('/api/run', async (req, res) => {
   const { stages, config } = req.body;
 
+  if (config?.datasets) {
+    try {
+      const prepared = await prepareDatasetQueue(config.datasets, config.datasetKind);
+      config.datasetPath = prepared.path;
+      config.videosDir = prepared.videosDir;
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error.message });
+      return;
+    }
+  }
   if (!config?.datasetPath || !fs.existsSync(config.datasetPath)) {
     res.status(400).json({ ok: false, error: `Dataset file not found: ${config?.datasetPath}` });
     return;

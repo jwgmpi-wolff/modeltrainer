@@ -16,6 +16,8 @@ import {
   Upload,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import Conversation from './Conversation.jsx';
+import WebsiteDataset from './WebsiteDataset.jsx';
 
 const apiBaseQuery = new URLSearchParams(window.location.search).get('apiBase');
 const API_BASE =
@@ -211,6 +213,8 @@ export default function App() {
   const [validating, setValidating] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [datasetKind, setDatasetKind] = useState('text'); // 'text' | 'video'
+  const [datasetQueue, setDatasetQueue] = useState([]);
+  const [datasetConnector, setDatasetConnector] = useState('chat-jsonl');
   const [videoModel, setVideoModel] = useState('Qwen/Qwen2-VL-2B-Instruct');
   const [customVideoModel, setCustomVideoModel] = useState('');
   const [maxFrames, setMaxFrames] = useState('8');
@@ -258,6 +262,27 @@ export default function App() {
   const effectiveModel = datasetKind === 'video'
     ? (videoModel === 'custom' ? customVideoModel.trim() : videoModel)
     : (model === 'custom' ? customModel.trim() : model);
+  const queuedDatasets = datasetQueue.filter((item) =>
+    (item.connector === 'video-jsonl') === (datasetKind === 'video'));
+
+  const enqueueDataset = (item) => {
+    setDataset(item);
+    setDatasetQueue((old) => [...old.filter((entry) => entry.path !== item.path), item]);
+    setValidation(null);
+  };
+
+  const moveDataset = (item, offset) => {
+    const target = queuedDatasets[queuedDatasets.indexOf(item) + offset];
+    if (!target) return;
+    setDatasetQueue((old) => {
+      const updated = [...old];
+      const from = updated.indexOf(item);
+      const to = updated.indexOf(target);
+      [updated[from], updated[to]] = [updated[to], updated[from]];
+      return updated;
+    });
+    setValidation(null);
+  };
 
   const appendLog = (line) => setLogs((old) => [...old.slice(-1999), line]);
 
@@ -542,10 +567,10 @@ export default function App() {
   }, [datasetKind]);
 
   const chooseDatasetFile = async (event) => {
-    const [file] = event.target.files;
-    if (!file) return;
+    const files = Array.from(event.target.files);
+    if (!files.length) return;
 
-    if (!file.name.toLowerCase().endsWith('.jsonl')) {
+    if (files.some((file) => !file.name.toLowerCase().endsWith('.jsonl'))) {
       appendLog('ERROR: Please pick a JSONL training data file.');
       event.target.value = '';
       return;
@@ -554,18 +579,19 @@ export default function App() {
     setUploading(true);
     setValidation(null);
     try {
+      for (const file of files) {
       const formData = new FormData();
       formData.append('file', file);
       const response = await fetch(`${API_BASE}/api/upload-dataset`, { method: 'POST', body: formData });
       const result = await response.json();
 
       if (!response.ok || !result.ok) {
-        appendLog(`ERROR: Upload failed. ${result.error || 'Unknown error.'}`);
-        return;
+        throw new Error(`Upload failed for ${file.name}. ${result.error || 'Unknown error.'}`);
       }
 
-      setDataset({ path: result.path, name: file.name, sizeBytes: result.sizeBytes });
+      enqueueDataset({ path: result.path, name: file.name, sizeBytes: result.sizeBytes, connector: datasetConnector });
       appendLog(`DATA: Uploaded "${file.name}" (${result.sizeBytes} bytes) to the backend at ${result.path}.`);
+      }
     } catch (error) {
       appendLog(`ERROR: Could not upload the file. Is the backend running? (${error.message})`);
     } finally {
@@ -575,9 +601,11 @@ export default function App() {
   };
 
   const chooseSampleDataset = (samplePath) => {
+    if (running) return;
     if (!samplePath) return;
     const sample = samples.find((s) => s.path === samplePath);
-    setDataset(sample ? { path: sample.path, name: sample.name, sizeBytes: sample.sizeBytes } : null);
+    if (!sample) return;
+    enqueueDataset({ path: sample.path, name: sample.name, sizeBytes: sample.sizeBytes, connector: datasetConnector });
     setValidation(null);
     appendLog(`DATA: Picked sample "${sample?.name}" from the backend's samples folder.`);
   };
@@ -627,11 +655,12 @@ export default function App() {
         return;
       }
 
-      setDataset({
+      enqueueDataset({
         path: result.manifestPath,
         videosDir: result.videosDir,
         name: videoManifestFile.name,
         videoCount: result.videoCount,
+        connector: 'video-jsonl',
       });
       appendLog(
         `DATA: Uploaded manifest "${videoManifestFile.name}" and ${result.videoCount} real video file(s) to ${result.videosDir}.`,
@@ -644,30 +673,38 @@ export default function App() {
   };
 
   const validateDataset = async () => {
-    if (!dataset) {
+    if (!queuedDatasets.length) {
       appendLog('ERROR: Pick a training data file first.');
       return;
     }
 
     setValidating(true);
     try {
+      const preparedResponse = await fetch(`${API_BASE}/api/datasets/prepare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ datasets: queuedDatasets, kind: datasetKind }),
+      });
+      const prepared = await preparedResponse.json();
+      if (!preparedResponse.ok || !prepared.ok) throw new Error(prepared.error || 'Dataset preparation failed.');
       const response = await fetch(`${API_BASE}/api/validate-dataset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          datasetPath: dataset.path,
+          datasetPath: prepared.path,
           kind: datasetKind,
-          videosDir: dataset.videosDir,
+          videosDir: prepared.videosDir,
         }),
       });
       const result = await response.json();
       setValidation(result);
       appendLog(
         result.ok
-          ? `VALIDATE: "${dataset.name}" is real and valid — ${result.valid_records}/${result.total_records} records passed.`
-          : `VALIDATE: "${dataset.name}" has real problems — ${result.invalid_records}/${result.total_records} records failed. First error: ${result.errors?.[0] || 'unknown'}`,
+          ? `VALIDATE: ${queuedDatasets.length} queued dataset(s) valid — ${result.valid_records}/${result.total_records} records passed.`
+          : `VALIDATE: Dataset queue has problems — ${result.error || result.errors?.[0] || 'unknown'}`,
       );
     } catch (error) {
+      setValidation({ ok: false, errors: [error.message] });
       appendLog(`ERROR: Could not validate the dataset. Is the backend running? (${error.message})`);
     } finally {
       setValidating(false);
@@ -723,7 +760,7 @@ export default function App() {
   };
 
   const runPipeline = async () => {
-    if (!dataset) {
+    if (!queuedDatasets.length) {
       appendLog(
         datasetKind === 'video'
           ? 'ERROR: Upload a video manifest and video clips before starting.'
@@ -762,9 +799,8 @@ export default function App() {
           config: {
             name,
             model: effectiveModel,
-            datasetPath: dataset.path,
+            datasets: queuedDatasets,
             datasetKind,
-            videosDir: dataset.videosDir,
             maxFrames: Number(maxFrames),
             fps: Number(fps),
             maxLength: Number(maxLength),
@@ -843,12 +879,14 @@ export default function App() {
           </Card>
         )}
 
+        <Conversation apiBase={API_BASE} />
+
         <div className="grid gap-5 lg:grid-cols-3">
           <Card className="lg:col-span-2">
             <CardHeader>
               <CardTitle>Pick your settings</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-4 md:grid-cols-2">
+            <CardContent className="settings-grid grid gap-4 md:grid-cols-2">
               <div className="space-y-2 md:col-span-2">
                 <Label>Training data type</Label>
                 <div className="flex gap-2">
@@ -997,7 +1035,7 @@ export default function App() {
                       variant="ghost"
                       className="border border-slate-800"
                       onClick={uploadVideoDataset}
-                      disabled={uploading || !videoManifestFile || videoClipFiles.length === 0}
+                      disabled={running || uploading || !videoManifestFile || videoClipFiles.length === 0}
                     >
                       <Upload className="mr-2 h-4 w-4" />
                       {uploading ? 'Uploading...' : 'Upload dataset'}
@@ -1006,7 +1044,7 @@ export default function App() {
                       variant="ghost"
                       className="border border-slate-800"
                       onClick={validateDataset}
-                      disabled={!dataset || validating}
+                      disabled={!queuedDatasets.length || validating || uploading || running}
                     >
                       <FileCheck2 className="mr-2 h-4 w-4" />
                       {validating ? 'Checking...' : 'Check this dataset'}
@@ -1038,8 +1076,9 @@ export default function App() {
                       ) : (
                         <div>
                           <p>
-                            Real check found problems: {validation.invalid_records}/{validation.total_records} records
-                            failed.
+                            {validation.error || (validation.total_records == null
+                              ? 'Dataset queue validation failed.'
+                              : `Real check found problems: ${validation.invalid_records}/${validation.total_records} records failed.`)}
                           </p>
                           <ul className="mt-1 list-disc pl-4">
                             {validation.errors?.slice(0, 5).map((err) => (
@@ -1053,28 +1092,34 @@ export default function App() {
                 </div>
               ) : (
                 <div className="space-y-2 md:col-span-2">
-                  <Label>Training data file</Label>
+                  <Label>Add training data files</Label>
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <Input value={dataset ? `${dataset.name} (${dataset.sizeBytes} bytes)` : ''} readOnly placeholder="No file picked yet" />
+                    <Input value={queuedDatasets.length ? `${queuedDatasets.length} dataset(s) queued` : ''} readOnly placeholder="No files queued yet" />
                     <input
                       ref={datasetFileInput}
                       type="file"
+                      multiple
                       accept=".jsonl,application/jsonl,application/x-ndjson"
                       className="sr-only"
                       onChange={chooseDatasetFile}
                     />
-                    <Button variant="secondary" onClick={() => datasetFileInput.current?.click()} disabled={uploading}>
+                    <Button variant="secondary" onClick={() => datasetFileInput.current?.click()} disabled={uploading || running}>
                       <Upload className="mr-2 h-4 w-4" />
                       {uploading ? 'Uploading...' : 'Browse files'}
                     </Button>
-                    <Button variant="ghost" className="border border-slate-800" onClick={validateDataset} disabled={!dataset || validating}>
+                    <Button variant="ghost" className="border border-slate-800" onClick={validateDataset} disabled={!queuedDatasets.length || validating || uploading || running}>
                       <FileCheck2 className="mr-2 h-4 w-4" />
-                      {validating ? 'Checking...' : 'Check this file'}
+                      {validating ? 'Checking queue...' : 'Check dataset queue'}
                     </Button>
                   </div>
                   <p className="text-xs text-slate-400">
-                    "Browse files" opens your real file manager and really uploads the file to the local backend on this laptop.
+                    Select multiple JSONL files to append to the queue. Each file keeps the connector chosen when it was added.
                   </p>
+                  <Label>Dataset connector (for the next files added)</Label>
+                  <Select value={datasetConnector} onValueChange={setDatasetConnector} aria-label="Dataset connector">
+                    <SelectItem value="chat-jsonl">Chat JSONL - messages with roles and content</SelectItem>
+                    <SelectItem value="prompt-completion-jsonl">Prompt/completion JSONL - convert to chat messages</SelectItem>
+                  </Select>
                   <Select value="" onValueChange={chooseSampleDataset} aria-label="Choose a sample data file">
                     <SelectItem value="" disabled>
                       Or pick a real sample data file from this repo
@@ -1098,7 +1143,9 @@ export default function App() {
                       ) : (
                         <div>
                           <p>
-                            Real check found problems: {validation.invalid_records}/{validation.total_records} records failed.
+                            {validation.error || (validation.total_records == null
+                              ? 'Dataset queue validation failed.'
+                              : `Real check found problems: ${validation.invalid_records}/${validation.total_records} records failed.`)}
                           </p>
                           <ul className="mt-1 list-disc pl-4">
                             {validation.errors?.slice(0, 5).map((err) => (
@@ -1111,6 +1158,32 @@ export default function App() {
                   )}
                 </div>
               )}
+
+              {datasetKind === 'text' && <WebsiteDataset apiBase={API_BASE} onDataset={enqueueDataset} disabled={running || uploading || validating} />}
+
+              <div className="space-y-2 md:col-span-2 option-frame">
+                <h3 className="font-semibold">Fine-tuning dataset queue ({queuedDatasets.length})</h3>
+                <p className="text-xs text-slate-400">
+                  All queued {datasetKind} datasets are combined in this order into one training run.
+                  Text uses the model tokenizer/chat template; video uses the vision-language processor.
+                  Choose a compatible {datasetKind === 'video' ? 'vision-language' : 'causal language'} base model.
+                  Quick training still samples only a small subset; turn it off to train on the full queue.
+                </p>
+                {!queuedDatasets.length && <p className="text-sm text-slate-400">No datasets queued. Add files or a sample above.</p>}
+                <ol className="space-y-2">
+                  {queuedDatasets.map((item, index) => <li key={item.path} className="dataset-entry">
+                    <span>{index + 1}. {item.name} <span className="text-xs text-slate-400">({item.connector})</span></span>
+                    <div className="flex gap-2">
+                      <Button variant="secondary" disabled={running || index === 0} onClick={() => moveDataset(item, -1)} aria-label={`Move ${item.name} up`}>Up</Button>
+                      <Button variant="secondary" disabled={running || index === queuedDatasets.length - 1} onClick={() => moveDataset(item, 1)} aria-label={`Move ${item.name} down`}>Down</Button>
+                      <Button variant="danger" disabled={running} onClick={() => {
+                        setDatasetQueue((old) => old.filter((entry) => entry.path !== item.path));
+                        setValidation(null);
+                      }} aria-label={`Remove ${item.name}`}>Remove</Button>
+                    </div>
+                  </li>)}
+                </ol>
+              </div>
 
               {datasetKind === 'video' ? (
                 <>
@@ -1215,7 +1288,7 @@ export default function App() {
             <CardContent className="space-y-4">
               {systemCheck ? (
                 <>
-                  <div className="grid gap-2 text-sm text-slate-300">
+                  <div className="system-inventory grid gap-2 text-sm text-slate-300">
                     <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
                       <span>CPU</span>
                       <span className="text-right text-slate-400">
@@ -1594,7 +1667,7 @@ export default function App() {
                 <li>Press the run button to run real commands.</li>
               </ol>
 
-              <Button className="w-full" onClick={runPipeline} disabled={running || backendOnline === false}>
+              <Button className="w-full" onClick={runPipeline} disabled={running || uploading || validating || !queuedDatasets.length || backendOnline === false}>
                 <Play className="mr-2 h-4 w-4" />
                 {running ? 'Running for real...' : 'Run now'}
               </Button>

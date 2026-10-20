@@ -10,13 +10,13 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("Local Model Lab Setup")]
 [assembly: AssemblyProduct("Local Model Lab")]
 [assembly: AssemblyCompany("Jerry Wolff")]
-[assembly: AssemblyVersion("1.0.1.0")]
-[assembly: AssemblyFileVersion("1.0.1.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 internal static class Installer
 {
     private const string AppName = "Local Model Lab";
-    private const string Version = "1.0.1";
+    private const string Version = "1.1.0";
     private const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\LocalModelLab";
 
     [STAThread]
