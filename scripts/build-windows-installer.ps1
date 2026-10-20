@@ -33,6 +33,11 @@ if ($installerSource -notmatch [regex]::Escape("const string Version = `"$versio
   throw "The installer registration version does not match package version $version."
 }
 
+npm --prefix server ci "--cpu=$Architecture" --os=win32 --no-audit --no-fund
+if ($LASTEXITCODE -ne 0) {
+  throw "Backend dependency installation for $Architecture failed with exit code $LASTEXITCODE."
+}
+
 npm run build
 if ($LASTEXITCODE -ne 0) {
   throw "Frontend build failed with exit code $LASTEXITCODE."

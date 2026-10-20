@@ -8,22 +8,24 @@ Local Model Lab is a real local fine-tuning pipeline manager for Hugging Face ca
 
 | Platform | Download | Availability |
 | --- | --- | --- |
-| Windows x64 (Intel / AMD) | [Windows x64 installer (.exe)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.0.1/Local.Model.Lab-Setup-1.0.1-x64.exe) | Published: v1.0.1 |
-| Windows ARM64 (Snapdragon) | [Windows ARM64 installer (.exe)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.0.1/Local.Model.Lab-Setup-1.0.1-arm64.exe) | Published: v1.0.1 |
+| Windows x64 (Intel / AMD) | [Windows x64 installer (.exe)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.1.0/Local.Model.Lab-Setup-1.1.0-x64.exe) | Published: v1.1.0 |
+| Windows ARM64 (Snapdragon) | [Windows ARM64 installer (.exe)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.1.0/Local.Model.Lab-Setup-1.1.0-arm64.exe) | Published: v1.1.0 |
 | macOS (Apple Silicon / Intel) | No published installer | Native installer packaging and validation are not currently provided. |
 | Linux (x64 / ARM64) | No published installer | No AppImage, `.deb`, or `.rpm` is currently published. |
 
-**Release scope:** the downloads above are the published v1.0.1 builds. New
-source changes, including concurrent chat, dataset queues, document crawling and
-exports, are not included in those installers until a new release is built and
-published. To run the updated source on Windows, follow [Install](#install) and
-[Launch the clickable Windows app](#launch-the-clickable-windows-app).
+**Release scope:** v1.1.0 includes concurrent Ollama chat and training, saved
+conversations and prompts, PDF/Word exports, multiple-dataset queues, website and
+document collection, and the navy interface with framed controls. Close Local
+Model Lab and run the appropriate v1.1.0 installer to replace an older version;
+the app's user-data workspace is separate from its installed program files.
+There is no automatic update mechanism. To run from source instead, follow
+[Install](#install) and [Launch the clickable Windows app](#launch-the-clickable-windows-app).
 
 ### Windows installers
 
-[![Download for Intel and AMD Windows](https://img.shields.io/badge/Download-x64%20Windows%20installer-0078D4?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.0.1/Local.Model.Lab-Setup-1.0.1-x64.exe)
+[![Download for Intel and AMD Windows](https://img.shields.io/badge/Download-x64%20Windows%20installer-0078D4?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.1.0/Local.Model.Lab-Setup-1.1.0-x64.exe)
 
-[![Download for Windows ARM](https://img.shields.io/badge/Download-ARM64%20Windows%20installer-5C2D91?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.0.1/Local.Model.Lab-Setup-1.0.1-arm64.exe)
+[![Download for Windows ARM](https://img.shields.io/badge/Download-ARM64%20Windows%20installer-5C2D91?style=for-the-badge&logo=windows)](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.1.0/Local.Model.Lab-Setup-1.1.0-arm64.exe)
 
 - **Intel/AMD computer:** download the x64 installer.
 - **Snapdragon/Windows ARM computer:** download the ARM64 installer.
@@ -34,11 +36,11 @@ published. To run the updated source on Windows, follow [Install](#install) and
 - This repository is private, so GitHub may require you to sign in before the
   installer downloads.
 
-Current v1.0.1 checksums:
+Current v1.1.0 SHA-256 checksums:
 
 ```text
-x64    82654F867DF7CC49757E6FFBD24528E41F3A2D37588513657ADCB7B564453807
-ARM64  B4EED5B3B465A71A18D106EF932046387F8A280A761BCEBF19FC59E4ADA79EB1
+x64    81E5818A7C787590F0825B9D8225F1954CD78DE9AA4025D08E33E17070F1FE3A
+ARM64  D0CA29266F41289FFA0A06B4A52BB84B29FAA7E4C59CA6A50BFA22C78AE73D92
 ```
 
 The project standard is explicit: **do not build mockups for pipeline behavior**. Every run button must execute real local work, stream real process output, and fail honestly when a dependency, model, GPU backend, or generated artifact is missing.
@@ -304,7 +306,7 @@ Create an Intel/AMD x64 setup executable with:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows-installer.ps1 -Architecture x64
 ```
 
-The generated `release\Local Model Lab-Setup-1.0.1-<architecture>.exe`
+The generated `release\Local Model Lab-Setup-1.1.0-<architecture>.exe`
 installers include the complete packaged desktop application and backend. Each
 installer:
 
@@ -312,6 +314,12 @@ installer:
 - applies the Local Model Lab icon to the executable and shortcuts;
 - creates Desktop and Start Menu shortcuts;
 - launches the application after installation.
+
+The build script reads the release version from `package.json`, checks matching
+C# installer/uninstaller metadata, and restores the backend's locked dependencies
+for the selected Windows CPU architecture. This includes the matching native PDF
+runtime binary. After cross-building x64 on Windows ARM, run
+`npm --prefix server ci` before returning to native ARM64 development.
 
 Use the `x64` installer for Intel/AMD Windows computers and the `arm64`
 installer for Snapdragon/Windows ARM computers. When training is first
