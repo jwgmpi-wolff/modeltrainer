@@ -2,6 +2,19 @@
 
 Local Model Lab is a real local fine-tuning pipeline manager for Hugging Face causal language models. It has a React/Vite frontend and an Express backend that runs real Python training, merge, GGUF conversion, quantization, Ollama registration, and smoke-test commands.
 
+<!-- project-downloads:start -->
+## APK and installer downloads
+
+| Package | Download | Source |
+| --- | --- | --- |
+| Windows installer | [Local.Model.Lab-Setup-1.1.0-arm64.exe](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.1.0/Local.Model.Lab-Setup-1.1.0-arm64.exe) | v1.1.0 |
+| Windows installer | [Local.Model.Lab-Setup-1.1.0-x64.exe](https://github.com/jwgmpi-wolff/modeltrainer/releases/download/v1.1.0/Local.Model.Lab-Setup-1.1.0-x64.exe) | v1.1.0 |
+
+Android may require approval to install apps from this download source. Debug APKs are labeled above. Windows executables that are not setup packages may require accompanying project files; follow the project-specific instructions below.
+
+- [Download the complete source ZIP](https://github.com/jwgmpi-wolff/modeltrainer/archive/refs/heads/main.zip).
+<!-- project-downloads:end -->
+
 ## Download installers
 
 [View all published releases and installer assets](https://github.com/jwgmpi-wolff/modeltrainer/releases/latest).
@@ -797,3 +810,9 @@ Validation:
 - Python scripts must compile.
 - A quick smoke run must show real stdout/stderr and write real artifacts or fail with a real actionable error.
 ```
+
+## Copyright
+
+Copyright (c) 2026 Jerry Wolff. See [COPYRIGHT](COPYRIGHT) for the scope of this
+notice. Existing licenses and third-party attribution remain unchanged; this
+notice does not grant additional permissions.
